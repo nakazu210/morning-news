@@ -1,0 +1,38 @@
+{
+  "categories": [
+    {
+      "id": "ai",
+      "name": "生成AI全般",
+      "enabled": true,
+      "focus": "新しいAIサービスや機能、大手企業の動き、仕事での活用",
+      "hours": 30,
+      "feeds": [
+        "https://rss.itmedia.co.jp/rss/2.0/aiplus.xml",
+        "https://news.google.com/rss/search?q=%E7%94%9F%E6%88%90AI+when:1d&hl=ja&gl=JP&ceid=JP:ja",
+        "https://news.google.com/rss/search?q=ChatGPT+OR+Claude+OR+Gemini+when:1d&hl=ja&gl=JP&ceid=JP:ja"
+      ]
+    },
+    {
+      "id": "housing",
+      "name": "住宅・不動産",
+      "enabled": true,
+      "focus": "住宅業界の動向、注文住宅、住宅ローンや金利、省エネ・補助金などの制度",
+      "hours": 30,
+      "feeds": [
+        "https://news.google.com/rss/search?q=%E6%B3%A8%E6%96%87%E4%BD%8F%E5%AE%85+OR+%E4%BD%8F%E5%AE%85%E6%A5%AD%E7%95%8C+OR+%E3%83%8F%E3%82%A6%E3%82%B9%E3%83%A1%E3%83%BC%E3%82%AB%E3%83%BC+when:1d&hl=ja&gl=JP&ceid=JP:ja",
+        "https://news.google.com/rss/search?q=%E4%BD%8F%E5%AE%85%E3%83%AD%E3%83%BC%E3%83%B3+OR+%E7%9C%81%E3%82%A8%E3%83%8D%E4%BD%8F%E5%AE%85+OR+%E4%BD%8F%E5%AE%85%E8%A3%9C%E5%8A%A9%E9%87%91+when:1d&hl=ja&gl=JP&ceid=JP:ja"
+      ]
+    },
+    {
+      "id": "okayama",
+      "name": "岡山県の自治体ニュース",
+      "enabled": true,
+      "focus": "岡山県や県内市町村の補助金・助成、移住支援、子育て支援、住宅政策、まちづくり",
+      "hours": 48,
+      "feeds": [
+        "https://news.google.com/rss/search?q=%E5%B2%A1%E5%B1%B1%E7%9C%8C%20%28%E8%A3%9C%E5%8A%A9%E9%87%91%20OR%20%E5%8A%A9%E6%88%90%20OR%20%E7%A7%BB%E4%BD%8F%20OR%20%E5%AD%90%E8%82%B2%E3%81%A6%E6%94%AF%E6%8F%B4%29%20when%3A2d&hl=ja&gl=JP&ceid=JP:ja",
+        "https://news.google.com/rss/search?q=%28%E5%B2%A1%E5%B1%B1%E7%9C%8C%20OR%20%E5%B2%A1%E5%B1%B1%E5%B8%82%20OR%20%E5%80%89%E6%95%B7%E5%B8%82%29%20%28%E4%BD%8F%E5%AE%85%20OR%20%E7%A9%BA%E3%81%8D%E5%AE%B6%20OR%20%E3%81%BE%E3%81%A1%E3%81%A5%E3%81%8F%E3%82%8A%20OR%20%E5%86%8D%E9%96%8B%E7%99%BA%29%20when%3A2d&hl=ja&gl=JP&ceid=JP:ja"
+      ]
+    }
+  ]
+}

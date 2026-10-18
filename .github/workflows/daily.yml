@@ -1,0 +1,95 @@
+name: daily-news
+
+on:
+  schedule:
+    - cron: "47 20 * * *"   # 毎朝 5:47(日本時間)。GitHub側の混雑で数十分遅れることがあります
+  workflow_dispatch:         # Actions画面から手動実行もできる
+
+permissions:
+  contents: write   # Releasesにmp3を保存するため
+  pages: write
+  id-token: write
+
+concurrency:
+  group: daily-news
+  cancel-in-progress: false
+
+env:
+  KEEP: 7   # 残すエピソード数(古いものは自動削除して容量を節約)
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    services:
+      voicevox:
+        image: voicevox/voicevox_engine:cpu-latest
+        ports:
+          - 50021:50021
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg
+          pip install -q -r requirements.txt
+
+      - name: Generate today's episode
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python generate.py
+
+      - name: Save episode to Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="ep-$(TZ=Asia/Tokyo date +%Y%m%d)"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" out/episode.mp3 out/episode.json --clobber
+          else
+            gh release create "$TAG" out/episode.mp3 out/episode.json \
+              --title "$TAG" --notes "自動生成エピソード"
+          fi
+
+      - name: Delete old episodes and collect recent ones
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAGS=$(gh release list --limit 100 --json tagName -q '.[].tagName' | grep '^ep-' | sort -r)
+          echo "$TAGS" | tail -n +$((KEEP + 1)) | xargs -r -I{} gh release delete {} --yes --cleanup-tag
+          for TAG in $(echo "$TAGS" | head -n "$KEEP"); do
+            gh release download "$TAG" -D "episodes/$TAG"
+          done
+
+      - id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Build site
+        env:
+          SITE_URL: ${{ steps.pages.outputs.base_url }}
+        run: python build_feed.py
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+      - name: Send to LINE
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          SITE_URL: ${{ steps.pages.outputs.base_url }}
+        run: python notify_line.py
