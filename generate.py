@@ -169,6 +169,8 @@ PROMPT = """あなたは新聞記者です。
 - 本文は200〜300文字。最初の1文で要点(誰が・何を・いつ)を伝え、続けて具体的な数字・金額・期間・対象・条件などの中身、最後に背景や影響(なぜ重要か)を書く。
 - 「〜について発表しました」のような中身のない書き方はしない。本文に書かれた具体的な情報を必ず入れる。
 - 本文が空の記事は、見出しと概要からわかる範囲で書き、推測で補わない。
+- 本文がログイン画面・セキュリティチェック・エラー表示など記事でない場合は、その記事を digest からも原稿からも外す。「詳細は不明」のような書き方はしない。
+- 同じ種類の記事は1つの category にまとめる(同じ種類名を何度も出さない)。
 - 製品名などは英字のままでよい。だ・である調で書く。
 
 出力はJSONのみ:
@@ -207,6 +209,16 @@ def ask_once(client, prompt: str) -> dict | None:
     return None
 
 
+def merge_digest(digest: list[dict], categories: list[dict]) -> list[dict]:
+    """同じ種類がばらばらに出てきても1つにまとめ、config.json の順に並べる。"""
+    merged = {}
+    for block in digest:
+        merged.setdefault(block.get("category", ""), []).extend(block.get("points", []))
+    order = [c["name"] for c in categories]
+    names = sorted(merged, key=lambda n: order.index(n) if n in order else len(order))
+    return [{"category": n, "points": merged[n]} for n in names if merged[n]]
+
+
 def write_script(items: list[dict], categories: list[dict], date_label: str, fetch=True) -> dict:
     """Gemini(無料枠)で記事を選び、本文を読んで原稿と要約を作る。失敗したら見出し読み上げに切り替える。"""
     key = os.getenv("GEMINI_API_KEY")
@@ -238,7 +250,7 @@ def write_script(items: list[dict], categories: list[dict], date_label: str, fet
         if data and data.get("script"):
             return {
                 "script": data["script"],
-                "digest": data.get("digest", []),
+                "digest": merge_digest(data.get("digest", []), categories),
                 "used": [int(i) for i in data.get("used", used)],
             }
     # 予備: AIなしで見出しを読み上げる(種類ごとに数本ずつ)
