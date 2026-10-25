@@ -22,6 +22,7 @@ from pathlib import Path
 
 import feedparser
 import requests
+import trafilatura
 
 JST = dt.timezone(dt.timedelta(hours=9))
 OUT = Path("out")
@@ -32,6 +33,9 @@ SPEAKER_ID = int(os.getenv("VOICEVOX_SPEAKER", "8"))  # 8 = 春日部つむぎ(�
 SPEED = float(os.getenv("VOICEVOX_SPEED", "1.15"))
 MAX_ITEMS = int(os.getenv("MAX_ITEMS", "8"))
 PER_CATEGORY = 12  # 1種類あたりAIに渡す記事の数
+BODY_CHARS = 2500  # AIに渡す本文の長さ(1記事あたり)
+UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"}
 # 無料枠はFlash系のみ。名前が変わっても動くよう、上から順に試します
 GEMINI_MODELS = os.getenv(
     "GEMINI_MODELS", "gemini-flash-latest,gemini-2.5-flash,gemini-2.5-flash-lite"
@@ -92,63 +96,140 @@ def fetch_category(cat: dict, seen: set) -> list[dict]:
     return mixed
 
 
-PROMPT = """あなたは朝のニュース番組のナレーターです。
-以下の記事一覧から重要度の高いものを選び、耳で聞いてわかる読み上げ原稿と、LINEで読む短い要約を作ってください。
+def resolve_link(link: str) -> str:
+    """Googleニュースのリンクを元記事のURLに変える(それ以外はそのまま)。"""
+    if "news.google.com" not in link:
+        return link
+    aid = link.split("?")[0].rstrip("/").split("/")[-1]
+    page = requests.get(f"https://news.google.com/rss/articles/{aid}", headers=UA, timeout=15).text
+    sg = re.search(r'data-n-a-sg="([^"]+)"', page)
+    ts = re.search(r'data-n-a-ts="([^"]+)"', page)
+    if not (sg and ts):
+        return link
+    req = ["garturlreq", [["X", "X", ["X", "X"], None, None, 1, 1, "US:en", None, 1, None, None,
+                           None, None, None, 0, 1], "X", "X", 1, [1, 1, 1], 1, 1, None, 0, 0, None, 0],
+           aid, int(ts.group(1)), sg.group(1)]
+    res = requests.post(
+        "https://news.google.com/_/DotsSplashUi/data/batchexecute",
+        headers={**UA, "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
+        data={"f.req": json.dumps([[["Fbv4je", json.dumps(req), None, "generic"]]])},
+        timeout=15,
+    )
+    return json.loads(json.loads(res.text.split("\n\n")[1])[0][2])[1]
+
+
+def fetch_body(item: dict):
+    """記事のページを開いて本文を取り出し、item["body"] に入れる。失敗しても止めない。"""
+    try:
+        item["link"] = resolve_link(item["link"])
+        page = requests.get(item["link"], headers=UA, timeout=15)
+        if page.encoding in (None, "ISO-8859-1"):
+            page.encoding = page.apparent_encoding
+        item["body"] = (trafilatura.extract(page.text) or "")[:BODY_CHARS]
+    except Exception as e:
+        print(f"body skip {item['link'][:80]}: {e}", file=sys.stderr)
+        item["body"] = ""
+
+
+SELECT_PROMPT = """以下は今朝のニュース候補の見出し一覧です。
+次の種類と重視してほしい内容に合う、重要度の高い記事を合計で最大{n}本選んでください。
 
 ニュースの種類と、重視してほしい内容:
 {focus}
 
+- 種類ごとになるべく偏りなく選ぶ(合う記事がない種類は0本でよい)。
+- 重視してほしい内容に合わない記事(芸能、スポーツの結果、事件・事故、他県だけの話題、個人ブログや広告記事など)は選ばない。
+- 同じ出来事を扱う記事は1本だけ選ぶ。
+
+出力はJSONのみ: {{"used": [選んだ記事の番号]}}
+
+記事一覧:
+{articles}
+"""
+
+PROMPT = """あなたは新聞記者です。
+以下の記事(本文つき)をもとに、耳で聞いてわかる読み上げ原稿と、LINEで読む新聞のような記事要約を作ってください。
+
+ニュースの種類:
+{focus}
+
 ルール(読み上げ原稿 script):
-- 全体で1500〜2000文字(約5分)。選ぶ記事は合計で最大{n}本。
+- 全体で2500〜3500文字(約8〜10分)。
 - 種類ごとにまとめ、「続いて、住宅のニュースです。」のように区切りを入れる。記事がない種類は飛ばす。
 - 冒頭は「おはようございます。{date}のニュースです。」で始める。
-- 各ニュースは「何が起きたか」「なぜ重要か」を2〜3文で。
+- 各ニュースは4〜6文で、「誰が・何を・いつ・どこで」「具体的な数字や中身」「背景・なぜ重要か」を伝える。
 - 英字の製品名や略語は、読み方がわかるようカタカナで書く(例: OpenAI→オープンエーアイ)。
 - 記号・箇条書き・URL・括弧は使わない。数字は読みやすい形で。
 - 記事にない事実は足さない。
-- 重視してほしい内容に合わない記事(スポーツの結果、事件・事故、他県の話題など)は選ばない。
 - 最後は「以上、今日のニュースでした。」で締める。
 
 ルール(LINE用要約 digest):
-- 原稿で取り上げたニュースを、種類ごとに1本1〜2文(60文字程度)で書く。
-- 製品名などは英字のままでよい。
+- すべての記事について、新聞記事のように「見出し」と「本文」を書く。
+- 見出しは20〜30文字で、何が起きたかが一目でわかるように。
+- 本文は200〜300文字。最初の1文で要点(誰が・何を・いつ)を伝え、続けて具体的な数字・金額・期間・対象・条件などの中身、最後に背景や影響(なぜ重要か)を書く。
+- 「〜について発表しました」のような中身のない書き方はしない。本文に書かれた具体的な情報を必ず入れる。
+- 本文が空の記事は、見出しと概要からわかる範囲で書き、推測で補わない。
+- 製品名などは英字のままでよい。だ・である調で書く。
 
 出力はJSONのみ:
-{{"script": "原稿", "digest": [{{"category": "種類名", "points": ["要約1", "要約2"]}}], "used": [使った記事の番号]}}
+{{"script": "原稿", "digest": [{{"category": "種類名", "points": [{{"headline": "見出し", "body": "本文"}}]}}], "used": [使った記事の番号]}}
 
 記事一覧:
 {articles}
 """
 
 
-def write_script(items: list[dict], categories: list[dict], date_label: str) -> dict:
-    """Gemini(無料枠)で原稿と要約を作る。失敗したら見出し読み上げに切り替える。"""
+def ask_gemini(client, prompt: str) -> dict | None:
+    """Geminiに聞いてJSONを返す。どのモデルも失敗したら None。"""
+    for model in GEMINI_MODELS:
+        try:
+            res = client.models.generate_content(
+                model=model.strip(),
+                contents=prompt,
+                config={"response_mime_type": "application/json"},
+            )
+            data = json.loads(res.text)
+            print(f"answered by {model}")
+            return data
+        except Exception as e:
+            print(f"model {model} failed: {e}", file=sys.stderr)
+    return None
+
+
+def write_script(items: list[dict], categories: list[dict], date_label: str, fetch=True) -> dict:
+    """Gemini(無料枠)で記事を選び、本文を読んで原稿と要約を作る。失敗したら見出し読み上げに切り替える。"""
     key = os.getenv("GEMINI_API_KEY")
-    articles = "\n".join(
-        f"[{i}]【{it['category']}】{it['title']} — {it['summary']}" for i, it in enumerate(items)
-    )
     focus = "\n".join(f"- {c['name']}: {c.get('focus', '')}" for c in categories)
     if key:
         from google import genai
 
         client = genai.Client(api_key=key)
-        prompt = PROMPT.format(n=MAX_ITEMS, date=date_label, focus=focus, articles=articles)
-        for model in GEMINI_MODELS:
-            try:
-                res = client.models.generate_content(
-                    model=model.strip(),
-                    contents=prompt,
-                    config={"response_mime_type": "application/json"},
-                )
-                data = json.loads(res.text)
-                print(f"script by {model}")
-                return {
-                    "script": data["script"],
-                    "digest": data.get("digest", []),
-                    "used": [int(i) for i in data.get("used", [])],
-                }
-            except Exception as e:
-                print(f"model {model} failed: {e}", file=sys.stderr)
+        # 1回目: 見出しから記事を選ぶ
+        headlines = "\n".join(
+            f"[{i}]【{it['category']}】{it['title']} — {it['summary']}" for i, it in enumerate(items)
+        )
+        picked = ask_gemini(client, SELECT_PROMPT.format(n=MAX_ITEMS, focus=focus, articles=headlines))
+        used = [int(i) for i in (picked or {}).get("used", []) if 0 <= int(i) < len(items)][:MAX_ITEMS]
+        if not used:
+            used = list(range(min(MAX_ITEMS, len(items))))
+        # 選んだ記事だけ本文を取りに行く
+        for i in used:
+            if fetch:
+                fetch_body(items[i])
+        print(f"bodies: {sum(1 for i in used if items[i].get('body'))}/{len(used)}")
+        # 2回目: 本文を読んで原稿と要約を書く
+        articles = "\n\n".join(
+            f"[{i}]【{items[i]['category']}】{items[i]['title']}\n"
+            f"概要: {items[i]['summary']}\n本文: {items[i].get('body', '')}"
+            for i in used
+        )
+        data = ask_gemini(client, PROMPT.format(date=date_label, focus=focus, articles=articles))
+        if data and data.get("script"):
+            return {
+                "script": data["script"],
+                "digest": data.get("digest", []),
+                "used": [int(i) for i in data.get("used", used)],
+            }
     # 予備: AIなしで見出しを読み上げる(種類ごとに数本ずつ)
     print("fallback: headlines only", file=sys.stderr)
     per = max(1, MAX_ITEMS // max(1, len(categories)))
@@ -246,7 +327,7 @@ def main():
         items = [{"category": c["name"], "title": f"{c['name']}のテスト記事{i}", "summary": "概要",
                   "link": f"https://example.com/{c['id']}/{i}", "when": ""}
                  for c in categories for i in range(3)]
-        result = write_script(items, categories, date_label)
+        result = write_script(items, categories, date_label, fetch=False)
         synth = synth_dummy
     else:
         items = fetch_news(categories)

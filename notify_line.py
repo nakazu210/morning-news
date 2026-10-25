@@ -16,17 +16,25 @@ SITE_URL = os.environ["SITE_URL"].rstrip("/")
 LIMIT = 4900  # LINEのテキストは1通5000文字まで
 
 
-def build_message(meta: dict) -> str:
-    lines = [f"【{meta['title']}】"]
+def format_point(p) -> str:
+    """要約1本を「◆見出し+本文」の形にする(古い形式の文字列にも対応)。"""
+    if isinstance(p, dict):
+        return f"◆{p.get('headline', '')}\n{p.get('body', '')}"
+    return f"◆{p}"
+
+
+def build_messages(meta: dict) -> list[str]:
+    """種類ごとに1つの吹き出しにする(LINEは1回で最大5つまで送れる)。"""
+    texts = []
     for block in meta.get("digest", []):
-        lines += ["", f"■ {block['category']}"]
-        lines += [f"・{p}" for p in block.get("points", [])]
-    footer = ["", "🔊 音声で聞く・元記事を見る", f"{SITE_URL}/#{meta['date']}"]
-    body = "\n".join(lines)
-    tail = "\n".join(footer)
-    if len(body) + len(tail) > LIMIT:
-        body = body[: LIMIT - len(tail) - 2] + "…"
-    return body + "\n" + tail
+        lines = [f"■ {block['category']}"]
+        lines += ["\n" + format_point(p) for p in block.get("points", [])]
+        texts.append("\n".join(lines))
+    texts = texts[:4] or ["今日は要約を作れませんでした。"]
+    texts[0] = f"【{meta['title']}】\n\n" + texts[0]
+    texts = [t if len(t) <= LIMIT else t[: LIMIT - 1] + "…" for t in texts]
+    texts.append(f"🔊 音声で聞く・元記事を見る\n{SITE_URL}/#{meta['date']}")
+    return texts
 
 
 def main():
@@ -37,7 +45,7 @@ def main():
         return
 
     meta = json.loads(Path("out/episode.json").read_text(encoding="utf-8"))
-    body = {"messages": [{"type": "text", "text": build_message(meta)}]}
+    body = {"messages": [{"type": "text", "text": t} for t in build_messages(meta)]}
     if user_id:
         url = "https://api.line.me/v2/bot/message/push"
         body["to"] = user_id
