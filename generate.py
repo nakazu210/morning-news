@@ -38,7 +38,7 @@ UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit
                     "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"}
 # 無料枠はFlash系のみ。名前が変わっても動くよう、上から順に試します
 GEMINI_MODELS = os.getenv(
-    "GEMINI_MODELS", "gemini-flash-latest,gemini-2.5-flash,gemini-2.5-flash-lite"
+    "GEMINI_MODELS", "gemini-flash-latest,gemini-3.8-flash,gemini-flash-lite-latest"
 ).split(",")
 
 
@@ -180,7 +180,18 @@ PROMPT = """あなたは新聞記者です。
 
 
 def ask_gemini(client, prompt: str) -> dict | None:
-    """Geminiに聞いてJSONを返す。どのモデルも失敗したら None。"""
+    """Geminiに聞いてJSONを返す。混雑で失敗したら少し待ってやり直し、それでもだめなら None。"""
+    for wait in (0, 30, 90):
+        if wait:
+            print(f"retry in {wait}s", file=sys.stderr)
+            time.sleep(wait)
+        data = ask_once(client, prompt)
+        if data is not None:
+            return data
+    return None
+
+
+def ask_once(client, prompt: str) -> dict | None:
     for model in GEMINI_MODELS:
         try:
             res = client.models.generate_content(
