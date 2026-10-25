@@ -34,7 +34,7 @@ LINEのリンクから約5分の読み上げ音声も聞けます(iPhoneのポ�
 |---|---|
 | `GEMINI_API_KEY` | https://aistudio.google.com/apikey で作るキー |
 | `LINE_CHANNEL_ACCESS_TOKEN` | LINE Developersの「チャネルアクセストークン(長期)」 |
-| `LINE_USER_ID` | LINE Developersの「あなたのユーザーID」(Uから始まる) |
+| `LINE_USER_ID` | 任意。LINE Developersの「あなたのユーザーID」(Uから始まる)。未登録なら友だち全員(=自分だけ)に送る |
 
 どれかが未登録でも止まりません(Geminiなし→見出しの読み上げ、LINEなし→送信だけ省略)。
 

@@ -1,7 +1,8 @@
 """今日のエピソードの要約と音声リンクを、LINE公式アカウントから自分に送るスクリプト。
 
 GitHub Actions でサイト公開の後に呼ばれます。
-LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID が未設定なら、何もせずに終わります。
+LINE_CHANNEL_ACCESS_TOKEN が未設定なら、何もせずに終わります。
+LINE_USER_ID があればその人だけに、なければ友だち全員(=自分だけ)に送ります。
 """
 
 import json
@@ -31,15 +32,21 @@ def build_message(meta: dict) -> str:
 def main():
     token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
     user_id = os.getenv("LINE_USER_ID")
-    if not (token and user_id):
+    if not token:
         print("LINEの設定がないので送信をスキップしました")
         return
 
     meta = json.loads(Path("out/episode.json").read_text(encoding="utf-8"))
+    body = {"messages": [{"type": "text", "text": build_message(meta)}]}
+    if user_id:
+        url = "https://api.line.me/v2/bot/message/push"
+        body["to"] = user_id
+    else:
+        url = "https://api.line.me/v2/bot/message/broadcast"
     res = requests.post(
-        "https://api.line.me/v2/bot/message/push",
+        url,
         headers={"Authorization": f"Bearer {token}"},
-        json={"to": user_id, "messages": [{"type": "text", "text": build_message(meta)}]},
+        json=body,
         timeout=30,
     )
     if not res.ok:
