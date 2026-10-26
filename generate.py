@@ -184,6 +184,21 @@ PROMPT = """あなたは新聞記者です。
 """
 
 
+EXPAND_PROMPT = """以下のニュース要約は短すぎます。元の記事をもとに、それぞれの本文を450〜600文字に書き直してください。
+具体的な数字・金額・期間・対象・条件・性能・料金などの中身と、背景や影響(なぜ重要か、これまでとの違い)を足してください。
+記事にない事実は足さない。だ・である調。見出しは変えない。
+
+出力はJSONのみ: {{"points": [{{"headline": "見出し", "body": "本文"}}]}}
+
+短い要約:
+{points}
+
+元の記事:
+{articles}
+"""
+MIN_BODY = 380  # これより短い要約は書き直してもらう
+
+
 def ask_gemini(client, prompt: str) -> dict | None:
     """Geminiに聞いてJSONを返す。混雑していたら少し待って高性能なモデルでやり直し、
     それでもだめなら最後に軽いモデル(lite)で書く。全部だめなら None。"""
@@ -268,8 +283,16 @@ def write_script(items: list[dict], categories: list[dict], date_label: str, fet
                 category=c["name"], focus=c.get("focus", ""), articles=articles))
             if not (data and data.get("script")):
                 continue
+            points = data.get("points", [])
+            if any(len(p.get("body", "")) < MIN_BODY for p in points):  # 軽いモデルは短く書きがち
+                longer = ask_gemini(client, EXPAND_PROMPT.format(
+                    points=json.dumps(points, ensure_ascii=False), articles=articles))
+                new = (longer or {}).get("points", [])
+                if len(new) == len(points):
+                    points = [n if len(n.get("body", "")) > len(o.get("body", "")) else o
+                              for o, n in zip(points, new)]
             parts.append(data["script"])
-            digest.append({"category": c["name"], "points": data.get("points", [])})
+            digest.append({"category": c["name"], "points": points})
             done += [int(i) for i in data.get("used", mine)]
         if parts:
             script = (f"おはようございます。{date_label}のニュースです。"
