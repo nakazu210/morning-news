@@ -146,6 +146,7 @@ SELECT_PROMPT = """以下は今朝のニュース候補の見出し一覧です�
 - 種類ごとに上限の本数まで選ぶ(合う記事が少ない種類は少なくてよい)。
 - 重視してほしい内容に合わない記事(芸能、スポーツの結果、事件・事故、他県だけの話題、海外だけの住宅・不動産の話題、個人ブログや広告記事など)は選ばない。
 - 英語の記事も選んでよい。新しいAIモデルや新機能の発表は、公式ブログや英語の一次情報を優先する。
+- 生成AIは「新しいAIモデルの発表」「ChatGPT・Claude・Geminiなど主要AIの新機能・アップデート」を最優先し、資金調達・パソコンなどのハードウェア製品・政治の話題は、それが足りないときだけ選ぶ。
 - 同じ出来事を扱う記事は1本だけ選ぶ。
 
 出力はJSONのみ: {{"used": [選んだ記事の番号]}}
@@ -155,34 +156,28 @@ SELECT_PROMPT = """以下は今朝のニュース候補の見出し一覧です�
 """
 
 PROMPT = """あなたは新聞記者です。
-以下の記事(本文つき)をもとに、耳で聞いてわかる読み上げ原稿と、LINEで読む新聞のような記事要約を作ってください。
+以下の「{category}」の記事(本文つき)をもとに、耳で聞いてわかる読み上げ原稿と、LINEで読む新聞のような記事要約を作ってください。
 
-ニュースの種類:
-{focus}
+この種類で重視してほしい内容: {focus}
 
 ルール(読み上げ原稿 script):
-- 長さは記事の本数に合わせ、1本あたり300〜400文字。
-- 種類ごとにまとめ、「続いて、住宅のニュースです。」のように区切りを入れる。記事がない種類は飛ばす。
-- 冒頭は「おはようございます。{date}のニュースです。」で始める。
+- 「{category}のニュースです。」で始め、記事ごとに300〜400文字で伝える(あいさつや締めの言葉は不要)。
 - 各ニュースは「誰が・何を・いつ・どこで」「具体的な数字や中身」「背景・なぜ重要か」「今後の見通し」を伝える。
 - 英字の製品名や略語は、読み方がわかるようカタカナで書く(例: OpenAI→オープンエーアイ)。
 - 記号・箇条書き・URL・括弧は使わない。数字は読みやすい形で。
 - 記事にない事実は足さない。
-- 最後は「以上、今日のニュースでした。」で締める。
 
-ルール(LINE用要約 digest):
+ルール(LINE用要約 points):
 - すべての記事について、新聞記事のように「見出し」と「本文」を書く。
 - 見出しは20〜30文字で、何が起きたかが一目でわかるように。
-- 本文は400〜600文字。最初の1文で要点(誰が・何を・いつ)を伝え、続けて具体的な数字・金額・期間・対象・条件・性能・料金・提供開始時期などの中身をできるだけ多く、最後に背景や影響(なぜ重要か、これまでとの違い、競合との比較)を書く。
-- 英語の記事も日本語で書く。
+- 本文は必ず400〜600文字(短すぎるのは不可)。最初の1文で要点(誰が・何を・いつ)を伝え、続けて具体的な数字・金額・期間・対象・条件・性能・料金・提供開始時期などの中身をできるだけ多く、最後に背景や影響(なぜ重要か、これまでとの違い、競合との比較)を書く。
+- 英語の記事も日本語で書く。製品名などは英字のままでよい。だ・である調で書く。
 - 「〜について発表しました」のような中身のない書き方はしない。本文に書かれた具体的な情報を必ず入れる。
 - 本文が空の記事は、見出しと概要からわかる範囲で書き、推測で補わない。
-- 本文がログイン画面・セキュリティチェック・エラー表示など記事でない場合は、その記事を digest からも原稿からも外す。「詳細は不明」のような書き方はしない。
-- 同じ種類の記事は1つの category にまとめる(同じ種類名を何度も出さない)。
-- 製品名などは英字のままでよい。だ・である調で書く。
+- 本文がログイン画面・セキュリティチェック・エラー表示など記事でない場合は、その記事を原稿からも要約からも外す。「詳細は不明」のような書き方はしない。
 
 出力はJSONのみ:
-{{"script": "原稿", "digest": [{{"category": "種類名", "points": [{{"headline": "見出し", "body": "本文"}}]}}], "used": [使った記事の番号]}}
+{{"script": "原稿", "points": [{{"headline": "見出し", "body": "本文"}}], "used": [使った記事の番号]}}
 
 記事一覧:
 {articles}
@@ -190,19 +185,22 @@ PROMPT = """あなたは新聞記者です。
 
 
 def ask_gemini(client, prompt: str) -> dict | None:
-    """Geminiに聞いてJSONを返す。混雑で失敗したら少し待ってやり直し、それでもだめなら None。"""
-    for wait in (0, 30, 90):
+    """Geminiに聞いてJSONを返す。混雑していたら少し待って高性能なモデルでやり直し、
+    それでもだめなら最後に軽いモデル(lite)で書く。全部だめなら None。"""
+    main = [m for m in GEMINI_MODELS if "lite" not in m]
+    lite = [m for m in GEMINI_MODELS if "lite" in m]
+    for wait in (0, 45, 120):
         if wait:
             print(f"retry in {wait}s", file=sys.stderr)
             time.sleep(wait)
-        data = ask_once(client, prompt)
+        data = ask_once(client, prompt, main)
         if data is not None:
             return data
-    return None
+    return ask_once(client, prompt, lite)
 
 
-def ask_once(client, prompt: str) -> dict | None:
-    for model in GEMINI_MODELS:
+def ask_once(client, prompt: str, models: list[str]) -> dict | None:
+    for model in models:
         try:
             res = client.models.generate_content(
                 model=model.strip(),
@@ -256,19 +254,27 @@ def write_script(items: list[dict], categories: list[dict], date_label: str, fet
             if fetch:
                 fetch_body(items[i])
         print(f"bodies: {sum(1 for i in used if items[i].get('body'))}/{len(used)}")
-        # 2回目: 本文を読んで原稿と要約を書く
-        articles = "\n\n".join(
-            f"[{i}]【{items[i]['category']}】{items[i]['title']}\n"
-            f"概要: {items[i]['summary']}\n本文: {items[i].get('body', '')}"
-            for i in used
-        )
-        data = ask_gemini(client, PROMPT.format(date=date_label, focus=focus, articles=articles))
-        if data and data.get("script"):
-            return {
-                "script": data["script"],
-                "digest": merge_digest(data.get("digest", []), categories),
-                "used": [int(i) for i in data.get("used", used)],
-            }
+        # 2回目以降: 種類ごとに本文を読んで原稿と要約を書く(一度に書く量を減らして長さを守らせる)
+        parts, digest, done = [], [], []
+        for c in categories:
+            mine = [i for i in used if items[i]["category"] == c["name"]]
+            if not mine:
+                continue
+            articles = "\n\n".join(
+                f"[{i}]{items[i]['title']}\n概要: {items[i]['summary']}\n本文: {items[i].get('body', '')}"
+                for i in mine
+            )
+            data = ask_gemini(client, PROMPT.format(
+                category=c["name"], focus=c.get("focus", ""), articles=articles))
+            if not (data and data.get("script")):
+                continue
+            parts.append(data["script"])
+            digest.append({"category": c["name"], "points": data.get("points", [])})
+            done += [int(i) for i in data.get("used", mine)]
+        if parts:
+            script = (f"おはようございます。{date_label}のニュースです。"
+                      + "".join(parts) + "以上、今日のニュースでした。")
+            return {"script": script, "digest": merge_digest(digest, categories), "used": done}
     # 予備: AIなしで見出しを読み上げる(種類ごとに数本ずつ)
     print("fallback: headlines only", file=sys.stderr)
     picked = []
