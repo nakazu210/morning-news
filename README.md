@@ -16,7 +16,7 @@ LINEのリンクから約5分の読み上げ音声も聞けます(iPhoneのポ�
 ## 仕組み
 1. ニュースサイトのRSS・Googleニュース検索から、種類ごとに記事を集める
 2. Gemini(無料枠)が読み上げ原稿とLINE用の要約を書く
-3. VOICEVOXで音声にして、GitHub Pagesで公開
+3. Edgeの音声(使えないときはVOICEVOX)で読み上げて、GitHub Pagesで公開
 4. LINE公式アカウントから自分宛てに要約と音声リンクを送る
 
 ## ファイルの役割
@@ -40,8 +40,9 @@ LINEのリンクから約5分の読み上げ音声も聞けます(iPhoneのポ�
 
 ## カスタマイズ
 - **配信時刻**:`daily.yml` の `cron`(UTCで指定。日本時間 −9時間)
-- **声**:`daily.yml` の Generate ステップに `VOICEVOX_SPEAKER: "3"`(ずんだもん)などを追加。
-  変えたら `VOICEVOX_CREDIT` も合わせて変更
+- **声**:`daily.yml` の Generate ステップに `EDGE_VOICE: "ja-JP-KeitaNeural"`(男性)を追加すると男性の声に。読む速さは `EDGE_RATE`(標準 +5%)
+- **予備の声(VOICEVOX)**:`VOICEVOX_SPEAKER: "3"`(ずんだもん)などを追加。
+  変えたら `VOICE_CREDIT` も合わせて変更
 - **読む速さ**:`VOICEVOX_SPEED`(標準1.15)
 
 ## 無料枠について

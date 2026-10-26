@@ -4,24 +4,31 @@
       "id": "ai",
       "name": "生成AI全般",
       "enabled": true,
-      "focus": "新しいAIサービスや機能、大手企業の動き、仕事での活用",
+      "focus": "新しいAIモデルの発表・性能比較、ChatGPT・Claude・Geminiなどの新機能やアップデート、AI企業の重要な動き。AIに誰よりも詳しくなれる最新情報を優先し、一般的な活用事例や裁判・行政の話題は後回し",
       "hours": 30,
       "feeds": [
         "https://rss.itmedia.co.jp/rss/2.0/aiplus.xml",
-        "https://news.google.com/rss/search?q=%E7%94%9F%E6%88%90AI+when:1d&hl=ja&gl=JP&ceid=JP:ja",
-        "https://news.google.com/rss/search?q=ChatGPT+OR+Claude+OR+Gemini+when:1d&hl=ja&gl=JP&ceid=JP:ja"
-      ]
+        "https://techcrunch.com/category/artificial-intelligence/feed/",
+        "https://openai.com/news/rss.xml",
+        "https://blog.google/technology/ai/rss/",
+        "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
+        "https://news.google.com/rss/search?q=ChatGPT+OR+Claude+OR+Gemini+OR+%E6%96%B0%E3%83%A2%E3%83%87%E3%83%AB+when:1d&hl=ja&gl=JP&ceid=JP:ja",
+        "https://news.google.com/rss/search?q=Anthropic+OR+OpenAI+OR+%22Google+DeepMind%22+OR+%22AI+model%22+when:1d&hl=en-US&gl=US&ceid=US:en"
+      ],
+      "count": 6
     },
     {
       "id": "housing",
       "name": "住宅・不動産",
       "enabled": true,
-      "focus": "住宅業界の動向、注文住宅、住宅ローンや金利、省エネ・補助金などの制度",
+      "focus": "日本国内の住宅業界の動向、注文住宅、住宅ローンや金利、省エネ・補助金などの国の制度(海外の話題は対象外)",
       "hours": 30,
       "feeds": [
         "https://news.google.com/rss/search?q=%E6%B3%A8%E6%96%87%E4%BD%8F%E5%AE%85+OR+%E4%BD%8F%E5%AE%85%E6%A5%AD%E7%95%8C+OR+%E3%83%8F%E3%82%A6%E3%82%B9%E3%83%A1%E3%83%BC%E3%82%AB%E3%83%BC+when:1d&hl=ja&gl=JP&ceid=JP:ja",
-        "https://news.google.com/rss/search?q=%E4%BD%8F%E5%AE%85%E3%83%AD%E3%83%BC%E3%83%B3+OR+%E7%9C%81%E3%82%A8%E3%83%8D%E4%BD%8F%E5%AE%85+OR+%E4%BD%8F%E5%AE%85%E8%A3%9C%E5%8A%A9%E9%87%91+when:1d&hl=ja&gl=JP&ceid=JP:ja"
-      ]
+        "https://news.google.com/rss/search?q=%E4%BD%8F%E5%AE%85%E3%83%AD%E3%83%BC%E3%83%B3+OR+%E7%9C%81%E3%82%A8%E3%83%8D%E4%BD%8F%E5%AE%85+OR+%E4%BD%8F%E5%AE%85%E8%A3%9C%E5%8A%A9%E9%87%91+when:1d&hl=ja&gl=JP&ceid=JP:ja",
+        "https://news.google.com/rss/search?q=%E5%9B%BD%E4%BA%A4%E7%9C%81+%E4%BD%8F%E5%AE%85+OR+%E4%B8%8D%E5%8B%95%E7%94%A3%E5%B8%82%E5%A0%B4+OR+%E6%96%B0%E8%A8%AD%E4%BD%8F%E5%AE%85%E7%9D%80%E5%B7%A5+when:1d&hl=ja&gl=JP&ceid=JP:ja"
+      ],
+      "count": 4
     },
     {
       "id": "okayama",
@@ -32,7 +39,8 @@
       "feeds": [
         "https://news.google.com/rss/search?q=%E5%B2%A1%E5%B1%B1%E7%9C%8C%20%28%E8%A3%9C%E5%8A%A9%E9%87%91%20OR%20%E5%8A%A9%E6%88%90%20OR%20%E7%A7%BB%E4%BD%8F%20OR%20%E5%AD%90%E8%82%B2%E3%81%A6%E6%94%AF%E6%8F%B4%29%20when%3A2d&hl=ja&gl=JP&ceid=JP:ja",
         "https://news.google.com/rss/search?q=%28%E5%B2%A1%E5%B1%B1%E7%9C%8C%20OR%20%E5%B2%A1%E5%B1%B1%E5%B8%82%20OR%20%E5%80%89%E6%95%B7%E5%B8%82%29%20%28%E4%BD%8F%E5%AE%85%20OR%20%E7%A9%BA%E3%81%8D%E5%AE%B6%20OR%20%E3%81%BE%E3%81%A1%E3%81%A5%E3%81%8F%E3%82%8A%20OR%20%E5%86%8D%E9%96%8B%E7%99%BA%29%20when%3A2d&hl=ja&gl=JP&ceid=JP:ja"
-      ]
+      ],
+      "count": 3
     }
   ]
 }

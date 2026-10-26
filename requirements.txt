@@ -4,3 +4,4 @@ google-genai>=1.0
 pillow>=10.1
 trafilatura>=2.0
 lxml_html_clean>=0.4
+edge-tts>=7.0

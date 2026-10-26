@@ -1,4 +1,7 @@
-"""ニュースを集めて、原稿とLINE用の要約を作り、VOICEVOXで読み上げてmp3にするスクリプト。
+"""ニュースを集めて、原稿とLINE用の要約を作り、音声で読み上げてmp3にするスクリプト。
+
+読み上げは Microsoft Edge の音声(edge-tts、無料・登録不要)を使い、
+使えなかったときだけ VOICEVOX に切り替えます。
 
 GitHub Actions から毎朝呼ばれます。出力:
   out/episode.mp3   … 今日の音声
@@ -8,6 +11,7 @@ GitHub Actions から毎朝呼ばれます。出力:
 """
 
 import argparse
+import asyncio
 import datetime as dt
 import io
 import itertools
@@ -28,12 +32,14 @@ JST = dt.timezone(dt.timedelta(hours=9))
 OUT = Path("out")
 
 # ---- 設定(環境変数で上書きできます) ----
+EDGE_VOICE = os.getenv("EDGE_VOICE", "ja-JP-NanamiNeural")  # 男性の声は ja-JP-KeitaNeural
+EDGE_RATE = os.getenv("EDGE_RATE", "+5%")  # 読む速さ
 VOICEVOX_URL = os.getenv("VOICEVOX_URL", "http://localhost:50021")
 SPEAKER_ID = int(os.getenv("VOICEVOX_SPEAKER", "8"))  # 8 = 春日部つむぎ(ノーマル)
 SPEED = float(os.getenv("VOICEVOX_SPEED", "1.15"))
-MAX_ITEMS = int(os.getenv("MAX_ITEMS", "8"))
-PER_CATEGORY = 12  # 1種類あたりAIに渡す記事の数
-BODY_CHARS = 2500  # AIに渡す本文の長さ(1記事あたり)
+DEFAULT_COUNT = 3  # config.json に count がない種類の記事数
+PER_CATEGORY = 25  # 1種類あたりAIに渡す候補の数
+BODY_CHARS = 4000  # AIに渡す本文の長さ(1記事あたり)
 UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"}
 # 無料枠はFlash系のみ。名前が変わっても動くよう、上から順に試します
@@ -132,13 +138,14 @@ def fetch_body(item: dict):
 
 
 SELECT_PROMPT = """以下は今朝のニュース候補の見出し一覧です。
-次の種類と重視してほしい内容に合う、重要度の高い記事を合計で最大{n}本選んでください。
+次の種類と重視してほしい内容に合う、重要度の高い記事を選んでください。
 
-ニュースの種類と、重視してほしい内容:
+ニュースの種類と、重視してほしい内容(かっこ内は選ぶ本数の上限):
 {focus}
 
-- 種類ごとになるべく偏りなく選ぶ(合う記事がない種類は0本でよい)。
-- 重視してほしい内容に合わない記事(芸能、スポーツの結果、事件・事故、他県だけの話題、個人ブログや広告記事など)は選ばない。
+- 種類ごとに上限の本数まで選ぶ(合う記事が少ない種類は少なくてよい)。
+- 重視してほしい内容に合わない記事(芸能、スポーツの結果、事件・事故、他県だけの話題、海外だけの住宅・不動産の話題、個人ブログや広告記事など)は選ばない。
+- 英語の記事も選んでよい。新しいAIモデルや新機能の発表は、公式ブログや英語の一次情報を優先する。
 - 同じ出来事を扱う記事は1本だけ選ぶ。
 
 出力はJSONのみ: {{"used": [選んだ記事の番号]}}
@@ -154,10 +161,10 @@ PROMPT = """あなたは新聞記者です。
 {focus}
 
 ルール(読み上げ原稿 script):
-- 全体で2500〜3500文字(約8〜10分)。
+- 長さは記事の本数に合わせ、1本あたり300〜400文字。
 - 種類ごとにまとめ、「続いて、住宅のニュースです。」のように区切りを入れる。記事がない種類は飛ばす。
 - 冒頭は「おはようございます。{date}のニュースです。」で始める。
-- 各ニュースは4〜6文で、「誰が・何を・いつ・どこで」「具体的な数字や中身」「背景・なぜ重要か」を伝える。
+- 各ニュースは「誰が・何を・いつ・どこで」「具体的な数字や中身」「背景・なぜ重要か」「今後の見通し」を伝える。
 - 英字の製品名や略語は、読み方がわかるようカタカナで書く(例: OpenAI→オープンエーアイ)。
 - 記号・箇条書き・URL・括弧は使わない。数字は読みやすい形で。
 - 記事にない事実は足さない。
@@ -166,7 +173,8 @@ PROMPT = """あなたは新聞記者です。
 ルール(LINE用要約 digest):
 - すべての記事について、新聞記事のように「見出し」と「本文」を書く。
 - 見出しは20〜30文字で、何が起きたかが一目でわかるように。
-- 本文は200〜300文字。最初の1文で要点(誰が・何を・いつ)を伝え、続けて具体的な数字・金額・期間・対象・条件などの中身、最後に背景や影響(なぜ重要か)を書く。
+- 本文は400〜600文字。最初の1文で要点(誰が・何を・いつ)を伝え、続けて具体的な数字・金額・期間・対象・条件・性能・料金・提供開始時期などの中身をできるだけ多く、最後に背景や影響(なぜ重要か、これまでとの違い、競合との比較)を書く。
+- 英語の記事も日本語で書く。
 - 「〜について発表しました」のような中身のない書き方はしない。本文に書かれた具体的な情報を必ず入れる。
 - 本文が空の記事は、見出しと概要からわかる範囲で書き、推測で補わない。
 - 本文がログイン画面・セキュリティチェック・エラー表示など記事でない場合は、その記事を digest からも原稿からも外す。「詳細は不明」のような書き方はしない。
@@ -222,7 +230,9 @@ def merge_digest(digest: list[dict], categories: list[dict]) -> list[dict]:
 def write_script(items: list[dict], categories: list[dict], date_label: str, fetch=True) -> dict:
     """Gemini(無料枠)で記事を選び、本文を読んで原稿と要約を作る。失敗したら見出し読み上げに切り替える。"""
     key = os.getenv("GEMINI_API_KEY")
-    focus = "\n".join(f"- {c['name']}: {c.get('focus', '')}" for c in categories)
+    counts = {c["name"]: c.get("count", DEFAULT_COUNT) for c in categories}
+    total = sum(counts.values())
+    focus = "\n".join(f"- {c['name']}({counts[c['name']]}本): {c.get('focus', '')}" for c in categories)
     if key:
         from google import genai
 
@@ -231,10 +241,16 @@ def write_script(items: list[dict], categories: list[dict], date_label: str, fet
         headlines = "\n".join(
             f"[{i}]【{it['category']}】{it['title']} — {it['summary']}" for i, it in enumerate(items)
         )
-        picked = ask_gemini(client, SELECT_PROMPT.format(n=MAX_ITEMS, focus=focus, articles=headlines))
-        used = [int(i) for i in (picked or {}).get("used", []) if 0 <= int(i) < len(items)][:MAX_ITEMS]
+        picked = ask_gemini(client, SELECT_PROMPT.format(focus=focus, articles=headlines))
+        used, taken = [], {}
+        for i in (picked or {}).get("used", []):
+            i = int(i)
+            cat = items[i]["category"] if 0 <= i < len(items) else None
+            if cat and i not in used and taken.get(cat, 0) < counts.get(cat, 0):
+                used.append(i)
+                taken[cat] = taken.get(cat, 0) + 1
         if not used:
-            used = list(range(min(MAX_ITEMS, len(items))))
+            used = list(range(min(total, len(items))))
         # 選んだ記事だけ本文を取りに行く
         for i in used:
             if fetch:
@@ -255,10 +271,9 @@ def write_script(items: list[dict], categories: list[dict], date_label: str, fet
             }
     # 予備: AIなしで見出しを読み上げる(種類ごとに数本ずつ)
     print("fallback: headlines only", file=sys.stderr)
-    per = max(1, MAX_ITEMS // max(1, len(categories)))
     picked = []
     for c in categories:
-        picked += [i for i, it in enumerate(items) if it["category"] == c["name"]][:per]
+        picked += [i for i, it in enumerate(items) if it["category"] == c["name"]][:counts[c["name"]]]
     body = "".join(f"{n}本目。{items[i]['title']}。" for n, i in enumerate(picked, 1))
     script = f"おはようございます。{date_label}のニュースです。{body}以上、今日のニュースでした。"
     digest = [
@@ -281,6 +296,17 @@ def split_sentences(text: str, limit: int = 120) -> list[str]:
         if p:
             out.append(p)
     return out
+
+
+def synth_edge(text: str, path: Path):
+    """Edgeの音声で原稿全体を読み上げ、軽いmp3にする。"""
+    import edge_tts
+
+    raw = OUT / "edge.mp3"
+    asyncio.run(edge_tts.Communicate(text, EDGE_VOICE, rate=EDGE_RATE).save(str(raw)))
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(raw),
+                    "-ac", "1", "-ar", "24000", "-b:a", "48k", str(path)], check=True)
+    raw.unlink()
 
 
 def synth_voicevox(text: str) -> bytes:
@@ -357,12 +383,20 @@ def main():
         if not items:
             sys.exit("ニュースが1件も取れませんでした")
         result = write_script(items, categories, date_label)
-        wait_voicevox()
-        synth = synth_voicevox
+        synth = None
 
     script = result["script"]
-    chunks = [synth(s) for s in split_sentences(script)]
-    to_mp3(chunks, OUT / "episode.mp3")
+    try:
+        if synth:
+            raise RuntimeError("dry-run")
+        synth_edge(script, OUT / "episode.mp3")
+        print(f"voice: edge {EDGE_VOICE}")
+    except Exception as e:
+        if not synth:  # 本番でEdgeが使えなかったときは VOICEVOX で読む
+            print(f"edge-tts failed, use VOICEVOX: {e}", file=sys.stderr)
+            wait_voicevox()
+            synth = synth_voicevox
+        to_mp3([synth(s) for s in split_sentences(script)], OUT / "episode.mp3")
 
     sources = [items[i] for i in result["used"] if 0 <= i < len(items)]
     meta = {
@@ -374,7 +408,7 @@ def main():
                     for s in sources],
     }
     (OUT / "episode.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"done: {len(script)} chars, {len(chunks)} sentences")
+    print(f"done: {len(script)} chars")
 
 
 if __name__ == "__main__":

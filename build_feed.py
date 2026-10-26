@@ -16,7 +16,7 @@ from pathlib import Path
 SITE_URL = os.environ["SITE_URL"].rstrip("/")  # 例: https://ユーザー名.github.io/morning-news
 SHOW_TITLE = os.getenv("SHOW_TITLE", "毎朝のニュース")
 REPO = os.getenv("GITHUB_REPOSITORY", "")  # 例: ユーザー名/morning-news
-CREDIT = os.getenv("VOICEVOX_CREDIT", "VOICEVOX:春日部つむぎ")
+CREDIT = os.getenv("VOICE_CREDIT", "Microsoft Edge 音声読み上げ(予備: VOICEVOX:春日部つむぎ)")
 JST = dt.timezone(dt.timedelta(hours=9))
 
 src, pub = Path("episodes"), Path("public")
@@ -71,7 +71,7 @@ feed = f"""<?xml version="1.0" encoding="UTF-8"?>
   <title>{html.escape(SHOW_TITLE)}</title>
   <link>{SITE_URL}/</link>
   <language>ja</language>
-  <description>生成AI・住宅・岡山県のニュースを毎朝5分で自動要約。音声: {html.escape(CREDIT)}</description>
+  <description>生成AI・住宅・岡山県のニュースを毎朝自動要約。音声: {html.escape(CREDIT)}</description>
   <itunes:image href="{SITE_URL}/cover.png"/>
   <itunes:explicit>false</itunes:explicit>
   <itunes:block>Yes</itunes:block>{items}
