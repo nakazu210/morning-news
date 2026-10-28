@@ -36,7 +36,7 @@ Claude Code・Codex・Antigravity など、どのAIが作業しても同じ進�
 - ファイルの削除、公開、プッシュ、外部への送信・投稿の前は、利用者に確認する(依頼に含まれていれば不要)
 
 ## 開発の決まり
-- GitHub Actions(`.github/workflows/daily.yml`)が毎朝 5:47(日本時間)に実行し、LINEに要約を送る。手元で動かすものではない
+- GitHub Actions(`.github/workflows/daily.yml`)が夜中(日本時間2:13〜5:13)に作成し、6:30 ちょうどにLINEへ要約を送る。手元で動かすものではない
 - ニュースの種類と本数は `config.json`(管理画面からも書き換わる)
 - 要約は Gemini の無料枠。手動実行(Actions画面の Run workflow)は無料枠を消費するので連打しない
 - **このリポジトリは公開**。個人情報・勤務先・秘密情報をファイルに書かない
