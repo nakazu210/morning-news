@@ -1,0 +1,45 @@
+name: voice-samples
+
+# 読み上げの声の聞き比べ用。Actions画面から手動で実行すると、
+# Releases の「voice-samples」に声ごとのmp3が置かれます(Geminiの無料枠は使いません)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  samples:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      voicevox:
+        image: voicevox/voicevox_engine:cpu-latest
+        ports:
+          - 50021:50021
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg
+          pip install -q -r requirements.txt
+
+      - name: Make samples
+        run: python voice_samples.py
+
+      - name: Save to Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete voice-samples --yes --cleanup-tag 2>/dev/null || true
+          gh release create voice-samples samples/*.mp3 \
+            --title "声の聞き比べ" --notes "$(cat samples/一覧.txt)" --prerelease

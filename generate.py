@@ -1,7 +1,7 @@
 """ニュースを集めて、原稿とLINE用の要約を作り、音声で読み上げてmp3にするスクリプト。
 
-読み上げは Microsoft Edge の音声(edge-tts、無料・登録不要)を使い、
-使えなかったときだけ VOICEVOX に切り替えます。
+読み上げの声は config.json の voice で選びます。
+VOICEVOX(かわいい声のキャラクター)が基本で、使えなかったときだけ Microsoft Edge の音声に切り替えます。
 
 GitHub Actions から毎朝呼ばれます。出力:
   out/episode.mp3   … 今日の音声
@@ -35,6 +35,7 @@ OUT = Path("out")
 EDGE_VOICE = os.getenv("EDGE_VOICE", "ja-JP-NanamiNeural")  # 男性の声は ja-JP-KeitaNeural
 EDGE_RATE = os.getenv("EDGE_RATE", "+5%")  # 読む速さ
 VOICEVOX_URL = os.getenv("VOICEVOX_URL", "http://localhost:50021")
+# VOICEVOX の声の番号と速さ。config.json の voice が優先されます
 SPEAKER_ID = int(os.getenv("VOICEVOX_SPEAKER", "8"))  # 8 = 春日部つむぎ(ノーマル)
 SPEED = float(os.getenv("VOICEVOX_SPEED", "1.15"))
 DEFAULT_COUNT = 3  # config.json に count がない種類の記事数
@@ -48,10 +49,20 @@ GEMINI_MODELS = os.getenv(
 ).split(",")
 
 
+def load_config() -> dict:
+    return json.loads(Path("config.json").read_text(encoding="utf-8"))
+
+
 def load_categories() -> list[dict]:
     """config.json から、オンになっているニュースの種類だけを返す。"""
-    config = json.loads(Path("config.json").read_text(encoding="utf-8"))
-    return [c for c in config["categories"] if c.get("enabled")]
+    return [c for c in load_config()["categories"] if c.get("enabled")]
+
+
+def load_voice() -> dict:
+    """config.json の voice(読み上げの声)を返す。書いていなければ VOICEVOX の春日部つむぎ。"""
+    voice = {"engine": "voicevox", "speaker": SPEAKER_ID, "speed": SPEED}
+    voice.update(load_config().get("voice", {}))
+    return voice
 
 
 def clean(text: str) -> str:
@@ -338,15 +349,15 @@ def synth_edge(text: str, path: Path):
     raw.unlink()
 
 
-def synth_voicevox(text: str) -> bytes:
+def synth_voicevox(text: str, speaker: int = SPEAKER_ID, speed: float = SPEED) -> bytes:
     q = requests.post(f"{VOICEVOX_URL}/audio_query",
-                      params={"text": text, "speaker": SPEAKER_ID}, timeout=60)
+                      params={"text": text, "speaker": speaker}, timeout=60)
     q.raise_for_status()
     query = q.json()
-    query["speedScale"] = SPEED
+    query["speedScale"] = speed
     query["postPhonemeLength"] = 0.35  # 文と文の間を少しあける
     s = requests.post(f"{VOICEVOX_URL}/synthesis",
-                      params={"speaker": SPEAKER_ID}, json=query, timeout=120)
+                      params={"speaker": speaker}, json=query, timeout=120)
     s.raise_for_status()
     return s.content
 
@@ -368,7 +379,7 @@ def wait_voicevox():
         except requests.RequestException:
             pass
         time.sleep(3)
-    sys.exit("VOICEVOX engine did not start")
+    raise RuntimeError("VOICEVOX engine did not start")
 
 
 def to_mp3(chunks: list[bytes], path: Path):
@@ -386,6 +397,27 @@ def to_mp3(chunks: list[bytes], path: Path):
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(wav),
                     "-ac", "1", "-ar", "24000", "-b:a", "48k", str(path)], check=True)
     wav.unlink()
+
+
+def speak(script: str, voice: dict):
+    """選んだ声で読み上げる。うまくいかなければもう一方の読み上げに切り替える。"""
+    def by_voicevox():
+        wait_voicevox()
+        chunks = [synth_voicevox(s, int(voice["speaker"]), float(voice["speed"]))
+                  for s in split_sentences(script)]
+        to_mp3(chunks, OUT / "episode.mp3")
+        print(f"voice: voicevox {voice.get('name', voice['speaker'])}")
+
+    def by_edge():
+        synth_edge(script, OUT / "episode.mp3")
+        print(f"voice: edge {EDGE_VOICE}")
+
+    first, backup = (by_edge, by_voicevox) if voice["engine"] == "edge" else (by_voicevox, by_edge)
+    try:
+        first()
+    except Exception as e:
+        print(f"voice failed, use backup: {e}", file=sys.stderr)
+        backup()
 
 
 def main():
@@ -415,17 +447,10 @@ def main():
         synth = None
 
     script = result["script"]
-    try:
-        if synth:
-            raise RuntimeError("dry-run")
-        synth_edge(script, OUT / "episode.mp3")
-        print(f"voice: edge {EDGE_VOICE}")
-    except Exception as e:
-        if not synth:  # 本番でEdgeが使えなかったときは VOICEVOX で読む
-            print(f"edge-tts failed, use VOICEVOX: {e}", file=sys.stderr)
-            wait_voicevox()
-            synth = synth_voicevox
+    if synth:
         to_mp3([synth(s) for s in split_sentences(script)], OUT / "episode.mp3")
+    else:
+        speak(script, load_voice())
 
     sources = [items[i] for i in result["used"] if 0 <= i < len(items)]
     meta = {

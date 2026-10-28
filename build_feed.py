@@ -16,7 +16,11 @@ from pathlib import Path
 SITE_URL = os.environ["SITE_URL"].rstrip("/")  # 例: https://ユーザー名.github.io/morning-news
 SHOW_TITLE = os.getenv("SHOW_TITLE", "毎朝のニュース")
 REPO = os.getenv("GITHUB_REPOSITORY", "")  # 例: ユーザー名/morning-news
-CREDIT = os.getenv("VOICE_CREDIT", "Microsoft Edge 音声読み上げ(予備: VOICEVOX:春日部つむぎ)")
+# 読み上げの声のクレジット(VOICEVOX は「VOICEVOX:キャラクター名」の表記が必要)
+_voice = json.loads(Path("config.json").read_text(encoding="utf-8")).get("voice", {})
+CREDIT = os.getenv("VOICE_CREDIT") or (
+    "Microsoft Edge 音声読み上げ" if _voice.get("engine") == "edge"
+    else f"VOICEVOX:{_voice.get('name', '春日部つむぎ').split('(')[0]}(予備: Microsoft Edge 音声読み上げ)")
 JST = dt.timezone(dt.timedelta(hours=9))
 
 src, pub = Path("episodes"), Path("public")

@@ -1,8 +1,10 @@
 name: daily-news
 
 on:
+  # GitHubの自動実行は混雑で数時間遅れることがあるので、夜中に何度か起こして早めに作っておき、
+  # LINEには 6:30(日本時間)ちょうどに送る。2回目以降は「今日の分はもうある」と分かれば何もしない
   schedule:
-    - cron: "47 20 * * *"   # 毎朝 5:47(日本時間)。GitHub側の混雑で数十分遅れることがあります
+    - cron: "13 17,18,19,20 * * *"   # 日本時間 2:13 / 3:13 / 4:13 / 5:13
   workflow_dispatch:         # Actions画面から手動実行もできる
 
 permissions:
@@ -18,9 +20,27 @@ env:
   KEEP: 7   # 残すエピソード数(古いものは自動削除して容量を節約)
 
 jobs:
-  build:
+  # 今日の分がもう作られているか調べる(手動実行のときは毎回作る)
+  check:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    outputs:
+      done: ${{ steps.check.outputs.done }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="ep-$(TZ=Asia/Tokyo date +%Y%m%d)"
+          if [ "${{ github.event_name }}" = "schedule" ] && gh release view "$TAG" -R "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "今日の分は作成済みなので何もしません"
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.done != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330   # 作成(最大45分ほど)+ 6:30まで待つ時間
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
@@ -86,6 +106,18 @@ jobs:
 
       - id: deploy
         uses: actions/deploy-pages@v4
+
+      - name: Wait until 6:30 (JST)
+        if: github.event_name == 'schedule'
+        run: |
+          TARGET=$(TZ=Asia/Tokyo date -d "06:30" +%s)
+          NOW=$(date +%s)
+          if [ "$NOW" -lt "$TARGET" ]; then
+            echo "6:30まで $(( (TARGET - NOW) / 60 )) 分待ちます"
+            sleep $((TARGET - NOW))
+          else
+            echo "6:30を過ぎているので、すぐに送ります"
+          fi
 
       - name: Send to LINE
         env:
