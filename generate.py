@@ -167,28 +167,23 @@ SELECT_PROMPT = """以下は今朝のニュース候補の見出し一覧です�
 """
 
 PROMPT = """あなたは新聞記者です。
-以下の「{category}」の記事(本文つき)をもとに、耳で聞いてわかる読み上げ原稿と、LINEで読む新聞のような記事要約を作ってください。
+以下の「{category}」の記事(本文つき)をもとに、LINEで読む新聞のような記事要約を作ってください。
+この要約は、そのまま音声でも読み上げます。
 
 この種類で重視してほしい内容: {focus}
 
-ルール(読み上げ原稿 script):
-- 「{category}のニュースです。」で始め、記事ごとに300〜400文字で伝える(あいさつや締めの言葉は不要)。
-- 各ニュースは「誰が・何を・いつ・どこで」「具体的な数字や中身」「背景・なぜ重要か」「今後の見通し」を伝える。
-- 英字の製品名や略語は、読み方がわかるようカタカナで書く(例: OpenAI→オープンエーアイ)。
-- 記号・箇条書き・URL・括弧は使わない。数字は読みやすい形で。
-- 記事にない事実は足さない。
-
-ルール(LINE用要約 points):
+ルール(要約 points):
 - すべての記事について、新聞記事のように「見出し」と「本文」を書く。
 - 見出しは20〜30文字で、何が起きたかが一目でわかるように。
 - 本文は必ず400〜600文字(短すぎるのは不可)。最初の1文で要点(誰が・何を・いつ)を伝え、続けて具体的な数字・金額・期間・対象・条件・性能・料金・提供開始時期などの中身をできるだけ多く、最後に背景や影響(なぜ重要か、これまでとの違い、競合との比較)を書く。
 - 英語の記事も日本語で書く。製品名などは英字のままでよい。だ・である調で書く。
 - 「〜について発表しました」のような中身のない書き方はしない。本文に書かれた具体的な情報を必ず入れる。
 - 本文が空の記事は、見出しと概要からわかる範囲で書き、推測で補わない。
-- 本文がログイン画面・セキュリティチェック・エラー表示など記事でない場合は、その記事を原稿からも要約からも外す。「詳細は不明」のような書き方はしない。
+- 本文がログイン画面・セキュリティチェック・エラー表示など記事でない場合は、その記事を要約から外す。「詳細は不明」のような書き方はしない。
+- 記号・箇条書き・URLは使わない(耳で聞いてもわかるように)。記事にない事実は足さない。
 
 出力はJSONのみ:
-{{"script": "原稿", "points": [{{"headline": "見出し", "body": "本文"}}], "used": [使った記事の番号]}}
+{{"points": [{{"headline": "見出し", "body": "本文"}}], "used": [使った記事の番号]}}
 
 記事一覧:
 {articles}
@@ -251,6 +246,42 @@ def merge_digest(digest: list[dict], categories: list[dict]) -> list[dict]:
     return [{"category": n, "points": merged[n]} for n in names if merged[n]]
 
 
+# 読み上げで英字を正しく読ませるための読み方(LINEの文章はそのまま。音声だけ置きかえる)
+READINGS = {
+    "ChatGPT": "チャットジーピーティー", "OpenAI": "オープンエーアイ", "Anthropic": "アンソロピック",
+    "Claude": "クロード", "Gemini": "ジェミニ", "DeepMind": "ディープマインド", "Google": "グーグル",
+    "Microsoft": "マイクロソフト", "Copilot": "コパイロット", "Apple": "アップル", "Amazon": "アマゾン",
+    "Meta": "メタ", "Llama": "ラマ", "NVIDIA": "エヌビディア", "Nvidia": "エヌビディア",
+    "xAI": "エックスエーアイ", "Grok": "グロック", "Mistral": "ミストラル", "DeepSeek": "ディープシーク",
+    "Sora": "ソラ", "Codex": "コーデックス", "Opus": "オーパス", "Sonnet": "ソネット", "Haiku": "ハイク",
+    "Flash": "フラッシュ", "Pro": "プロ", "API": "エーピーアイ", "GPU": "ジーピーユー",
+    "GPT": "ジーピーティー", "AI": "エーアイ", "ZEH": "ゼッチ", "GX": "ジーエックス",
+}
+
+
+def for_reading(text: str) -> str:
+    """音声用に、英字の名前をカタカナにし、読まなくてよい記号を外す。"""
+    text = re.sub(r"https?://\S+", "", text)
+    for word in sorted(READINGS, key=len, reverse=True):
+        text = re.sub(rf"(?<![A-Za-z]){re.escape(word)}(?![A-Za-z])", READINGS[word], text)
+    return re.sub(r"[「」『』【】〈〉《》（）()\[\]・※*#]|(?<=ー)-", " ", text)
+
+
+def digest_to_script(digest: list[dict], date_label: str) -> str:
+    """LINEの要約(見出し＋本文)を、全部そのまま読み上げる原稿にする。"""
+    parts = [f"おはようございます。{date_label}のニュースです。"]
+    for block in digest:
+        parts.append(f"まずは、{block['category']}のニュースです。" if len(parts) == 1
+                     else f"続いて、{block['category']}のニュースです。")
+        for n, p in enumerate(block["points"], 1):
+            if isinstance(p, dict):
+                parts.append(f"{n}本目。{p.get('headline', '')}。{p.get('body', '')}")
+            else:
+                parts.append(f"{n}本目。{p}。")
+    parts.append("以上、今日のニュースでした。今日もいってらっしゃい。")
+    return for_reading("".join(parts))
+
+
 def write_script(items: list[dict], categories: list[dict], date_label: str, fetch=True) -> dict:
     """Gemini(無料枠)で記事を選び、本文を読んで原稿と要約を作る。失敗したら見出し読み上げに切り替える。"""
     key = os.getenv("GEMINI_API_KEY")
@@ -281,7 +312,7 @@ def write_script(items: list[dict], categories: list[dict], date_label: str, fet
                 fetch_body(items[i])
         print(f"bodies: {sum(1 for i in used if items[i].get('body'))}/{len(used)}")
         # 2回目以降: 種類ごとに本文を読んで原稿と要約を書く(一度に書く量を減らして長さを守らせる)
-        parts, digest, done = [], [], []
+        digest, done = [], []
         for c in categories:
             mine = [i for i in used if items[i]["category"] == c["name"]]
             if not mine:
@@ -292,7 +323,7 @@ def write_script(items: list[dict], categories: list[dict], date_label: str, fet
             )
             data = ask_gemini(client, PROMPT.format(
                 category=c["name"], focus=c.get("focus", ""), articles=articles))
-            if not (data and data.get("script")):
+            if not (data and data.get("points")):
                 continue
             points = data.get("points", [])
             if any(len(p.get("body", "")) < MIN_BODY for p in points):  # 軽いモデルは短く書きがち
@@ -302,13 +333,11 @@ def write_script(items: list[dict], categories: list[dict], date_label: str, fet
                 if len(new) == len(points):
                     points = [n if len(n.get("body", "")) > len(o.get("body", "")) else o
                               for o, n in zip(points, new)]
-            parts.append(data["script"])
             digest.append({"category": c["name"], "points": points})
             done += [int(i) for i in data.get("used", mine)]
-        if parts:
-            script = (f"おはようございます。{date_label}のニュースです。"
-                      + "".join(parts) + "以上、今日のニュースでした。")
-            return {"script": script, "digest": merge_digest(digest, categories), "used": done}
+        if digest:
+            digest = merge_digest(digest, categories)
+            return {"script": digest_to_script(digest, date_label), "digest": digest, "used": done}
     # 予備: AIなしで見出しを読み上げる(種類ごとに数本ずつ)
     print("fallback: headlines only", file=sys.stderr)
     picked = []
@@ -399,14 +428,27 @@ def to_mp3(chunks: list[bytes], path: Path):
     wav.unlink()
 
 
+def find_speaker(voice: dict) -> int:
+    """config.json の name(キャラクター名)と style から VOICEVOX の声の番号を調べる。
+    見つからなければ speaker の番号を使う。"""
+    name, style = voice.get("name", "").split("(")[0], voice.get("style", "ノーマル")
+    for sp in requests.get(f"{VOICEVOX_URL}/speakers", timeout=30).json():
+        if sp["name"] == name:
+            styles = {st["name"]: st["id"] for st in sp["styles"]}
+            return styles.get(style, sp["styles"][0]["id"])
+    print(f"voice {name} not found, use speaker {voice['speaker']}", file=sys.stderr)
+    return int(voice["speaker"])
+
+
 def speak(script: str, voice: dict):
     """選んだ声で読み上げる。うまくいかなければもう一方の読み上げに切り替える。"""
     def by_voicevox():
         wait_voicevox()
-        chunks = [synth_voicevox(s, int(voice["speaker"]), float(voice["speed"]))
+        speaker = find_speaker(voice)
+        chunks = [synth_voicevox(s, speaker, float(voice["speed"]))
                   for s in split_sentences(script)]
         to_mp3(chunks, OUT / "episode.mp3")
-        print(f"voice: voicevox {voice.get('name', voice['speaker'])}")
+        print(f"voice: voicevox {voice.get('name')} {voice.get('style')} ({speaker})")
 
     def by_edge():
         synth_edge(script, OUT / "episode.mp3")

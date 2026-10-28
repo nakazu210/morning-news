@@ -1,8 +1,9 @@
 {
   "voice": {
     "engine": "voicevox",
+    "name": "猫使ビィ",
+    "style": "ノーマル",
     "speaker": 8,
-    "name": "春日部つむぎ(ノーマル)",
     "speed": 1.15
   },
   "categories": [
