@@ -59,9 +59,13 @@ def load_categories() -> list[dict]:
 
 
 def load_voice() -> dict:
-    """config.json の voice(読み上げの声)を返す。書いていなければ VOICEVOX の春日部つむぎ。"""
+    """config.json の voice(読み上げの声)を返す。書いていなければ VOICEVOX の春日部つむぎ。
+    voice に rotation(声の一覧)があれば、日替わりで順番に使う。"""
     voice = {"engine": "voicevox", "speaker": SPEAKER_ID, "speed": SPEED}
     voice.update(load_config().get("voice", {}))
+    rotation = voice.pop("rotation", [])
+    if rotation:
+        voice.update(rotation[dt.datetime.now(JST).toordinal() % len(rotation)])
     return voice
 
 
@@ -497,6 +501,7 @@ def main():
     sources = [items[i] for i in result["used"] if 0 <= i < len(items)]
     meta = {
         "date": today.strftime("%Y-%m-%d"),
+        "voice": load_voice().get("name", ""),
         "title": f"{date_label}の朝ニュース",
         "script": script,
         "digest": result["digest"],

@@ -20,7 +20,8 @@ REPO = os.getenv("GITHUB_REPOSITORY", "")  # 例: ユーザー名/morning-news
 _voice = json.loads(Path("config.json").read_text(encoding="utf-8")).get("voice", {})
 CREDIT = os.getenv("VOICE_CREDIT") or (
     "Microsoft Edge 音声読み上げ" if _voice.get("engine") == "edge"
-    else f"VOICEVOX:{_voice.get('name', '春日部つむぎ').split('(')[0]}(予備: Microsoft Edge 音声読み上げ)")
+    else "VOICEVOX:" + "、".join(v["name"] for v in _voice.get("rotation") or [_voice | {"name": _voice.get("name", "春日部つむぎ")}])
+    + "(予備: Microsoft Edge 音声読み上げ)")
 JST = dt.timezone(dt.timedelta(hours=9))
 
 src, pub = Path("episodes"), Path("public")
