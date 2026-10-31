@@ -3,6 +3,7 @@
 GitHub Actions でサイト公開の後に呼ばれます。
 LINE_CHANNEL_ACCESS_TOKEN が未設定なら、何もせずに終わります。
 LINE_USER_ID があればその人だけに、なければ友だち全員に送ります(社長も友だち登録済み)。
+TEST_SEND=true(手動のテスト実行)のときは LINE_TEST_USER_ID の人だけに送り、なければ送りません。
 
 見た目は「表紙(今日の要点＋目次＋音声ボタン)」と「種類ごとのカード(横にめくる)」。
 各種類の1枚目には、その種類だけの音声を聞くボタンを付けます。
@@ -149,6 +150,12 @@ def main():
     if not token:
         print("LINEの設定がないので送信をスキップしました")
         return
+    if os.getenv("TEST_SEND") == "true":
+        user_id = os.getenv("LINE_TEST_USER_ID")
+        if not user_id:
+            print("テスト実行ですが LINE_TEST_USER_ID がないので、全員には送らずに終わります")
+            return
+        print("テスト実行なので自分だけに送ります")
 
     meta = json.loads(Path("out/episode.json").read_text(encoding="utf-8"))
     kind = "push" if user_id else "broadcast"

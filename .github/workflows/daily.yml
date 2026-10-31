@@ -5,7 +5,13 @@ on:
   # LINEには 6:30(日本時間)ちょうどに送る。2回目以降は「今日の分はもうある」と分かれば何もしない
   schedule:
     - cron: "13 17,18,19,20 * * *"   # 日本時間 2:13 / 3:13 / 4:13 / 5:13
-  workflow_dispatch:         # Actions画面から手動実行もできる
+  workflow_dispatch:         # Actions画面から手動実行もできる(ふだんは「自分だけ」にテスト送信)
+    inputs:
+      send_to:
+        description: "LINEの送り先"
+        type: choice
+        options: ["自分だけ(テスト)", "全員(社長にも届く)"]
+        default: "自分だけ(テスト)"
 
 permissions:
   contents: write   # Releasesにmp3を保存するため
@@ -18,6 +24,8 @@ concurrency:
 
 env:
   KEEP: 7   # 残すエピソード数(古いものは自動削除して容量を節約)
+  # 手動実行で「全員」を選ばなかったときはテスト(LINEは LINE_TEST_USER_ID の人だけに送る)
+  TEST_SEND: ${{ github.event_name == 'workflow_dispatch' && inputs.send_to != '全員(社長にも届く)' }}
 
 jobs:
   # 今日の分がもう作られているか調べる(手動実行のときは毎回作る)
@@ -31,7 +39,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="ep-$(TZ=Asia/Tokyo date +%Y%m%d)"
-          if [ "${{ github.event_name }}" = "schedule" ] && gh release view "$TAG" -R "${{ github.repository }}" >/dev/null 2>&1; then
+          # テストで作った分(説明が「テスト」)は、作成済みとみなさず朝にもう一度作って全員に送る
+          NOTES=$(gh release view "$TAG" -R "${{ github.repository }}" --json body -q .body 2>/dev/null || echo "none")
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$NOTES" != "none" ] && [ "$NOTES" != "テスト" ]; then
             echo "今日の分は作成済みなので何もしません"
             echo "done=true" >> "$GITHUB_OUTPUT"
           fi
@@ -73,13 +83,15 @@ jobs:
       - name: Save episode to Releases
         env:
           GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ env.TEST_SEND == 'true' && 'テスト' || '自動生成エピソード' }}
         run: |
           TAG="ep-$(TZ=Asia/Tokyo date +%Y%m%d)"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" out/episode*.mp3 out/episode.json --clobber
+            gh release edit "$TAG" --notes "$NOTES"
           else
             gh release create "$TAG" out/episode*.mp3 out/episode.json \
-              --title "$TAG" --notes "自動生成エピソード"
+              --title "$TAG" --notes "$NOTES"
           fi
 
       - name: Delete old episodes and collect recent ones
@@ -123,5 +135,6 @@ jobs:
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          LINE_TEST_USER_ID: ${{ secrets.LINE_TEST_USER_ID }}
           SITE_URL: ${{ steps.pages.outputs.base_url }}
         run: python notify_line.py
