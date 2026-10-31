@@ -4,7 +4,8 @@
 VOICEVOX(かわいい声のキャラクター)が基本で、使えなかったときだけ Microsoft Edge の音声に切り替えます。
 
 GitHub Actions から毎朝呼ばれます。出力:
-  out/episode.mp3   … 今日の音声
+  out/episode.mp3   … 今日の音声(全部通し)
+  out/episode-<種類のid>.mp3 … 種類ごとの音声(LINEの各ジャンルのボタンから聞く)
   out/episode.json  … タイトル・原稿・LINE用要約・元記事リンク
 
 どの種類のニュースを集めるかは config.json(管理画面から変更できます)で決めます。
@@ -99,7 +100,7 @@ def fetch_category(cat: dict, seen: set) -> list[dict]:
                 continue
             title = clean(e.get("title", ""))
             key = re.sub(r"\W", "", title)[:30]
-            if not title or key in seen:
+            if not title or key in seen or any(w in title for w in cat.get("exclude", [])):
                 continue
             seen.add(key)
             items.append({
@@ -158,7 +159,8 @@ SELECT_PROMPT = """以下は今朝のニュース候補の見出し一覧です�
 ニュースの種類と、重視してほしい内容(かっこ内は選ぶ本数の上限):
 {focus}
 
-- 種類ごとに上限の本数まで選ぶ(合う記事が少ない種類は少なくてよい)。
+- 種類ごとに上限の本数まで選ぶ。ただし重視してほしい内容に本当に合う記事だけを選び、合う記事が少ない種類は少なくてよい(0本でもよい)。数合わせで関係の薄い記事を選ばない。
+- 自治体のニュースは、住民や事業者が使える補助金・助成・支援制度、住宅・移住・子育て・まちづくりの政策を優先し、業務委託の公募・入札・職員採用・イベント告知・施設の休館などは選ばない。
 - 重視してほしい内容に合わない記事(芸能、スポーツの結果、事件・事故、他県だけの話題、海外だけの住宅・不動産の話題、個人ブログや広告記事など)は選ばない。
 - 英語の記事も選んでよい。新しいAIモデルや新機能の発表は、公式ブログや英語の一次情報を優先する。
 - 生成AIは「新しいAIモデルの発表」「ChatGPT・Claude・Geminiなど主要AIの新機能・アップデート」を最優先し、資金調達・パソコンなどのハードウェア製品・政治の話題は、それが足りないときだけ選ぶ。
@@ -189,9 +191,9 @@ PROMPT = """あなたは新聞記者です。
 - 本文がログイン画面・セキュリティチェック・エラー表示など記事でない場合は、その記事を要約から外す。「詳細は不明」のような書き方はしない。
 - 箇条書き・URLは使わない。記事にない事実は足さない。
 - 見出しと本文に出てきた英字の名前は、すべて readings にカタカナの読み方を入れる(音声の読み上げに使う)。
-
+{point_rule}
 出力はJSONのみ:
-{{"points": [{{"headline": "見出し", "body": "本文"}}], "used": [使った記事の番号], "readings": {{"Hugging Face": "ハギングフェイス"}}}}
+{{"points": [{{"headline": "見出し", "body": "本文"{point_field}}}], "used": [使った記事の番号], "readings": {{"Hugging Face": "ハギングフェイス"}}}}
 
 記事一覧:
 {articles}
@@ -211,6 +213,19 @@ EXPAND_PROMPT = """以下のニュース要約は短すぎます。元の記事�
 
 元の記事:
 {articles}
+"""
+POINT_RULE = """- 各記事に point(60〜100文字)を付ける。{point}を、記事の事実にもとづいて具体的に書く(記事にない数字や事実は足さない)。
+"""
+
+TOP_PROMPT = """以下は今朝のニュース要約です。忙しい人が表紙だけ見ても大事なことがわかるように、
+今日いちばん押さえておきたい要点を3つ、それぞれ40〜60文字で書いてください。
+- 種類にかたよらず、仕事や生活への影響が大きいものを選ぶ。
+- 数字は算用数字、会社名・製品名は英字のまま。だ・である調。記事にない事実は足さない。
+
+出力はJSONのみ: {{"top": ["要点1", "要点2", "要点3"]}}
+
+ニュース要約:
+{digest}
 """
 MIN_BODY = 380  # これより短い要約は書き直してもらう
 
@@ -252,8 +267,9 @@ def merge_digest(digest: list[dict], categories: list[dict]) -> list[dict]:
     for block in digest:
         merged.setdefault(block.get("category", ""), []).extend(block.get("points", []))
     order = [c["name"] for c in categories]
+    ids = {c["name"]: c.get("id", "") for c in categories}
     names = sorted(merged, key=lambda n: order.index(n) if n in order else len(order))
-    return [{"category": n, "points": merged[n]} for n in names if merged[n]]
+    return [{"category": n, "id": ids.get(n, ""), "points": merged[n]} for n in names if merged[n]]
 
 
 # 読み上げで英字を正しく読ませるための読み方(LINEの文章はそのまま。音声だけ置きかえる)
@@ -281,19 +297,34 @@ def for_reading(text: str, extra: dict | None = None) -> str:
     return re.sub(r"[「」『』【】〈〉《》（）()\[\]・※*#]|(?<=ー)-", " ", text)
 
 
-def digest_to_script(digest: list[dict], date_label: str, readings: dict | None = None) -> str:
-    """LINEの要約(見出し＋本文)を、全部そのまま読み上げる原稿にする。"""
-    parts = [f"おはようございます。{date_label}のニュースです。"]
+def digest_to_parts(digest: list[dict], date_label: str, readings: dict | None = None,
+                    top: list[str] | None = None) -> list[dict]:
+    """LINEの要約(見出し＋本文＋ポイント)を、全部そのまま読み上げる原稿にする。
+    種類ごとに分けておき、全部通しの音声と、種類ごとの音声の両方を作れるようにする。"""
+    intro = f"おはようございます。{date_label}のニュースです。"
+    if top:
+        intro += "まずは今日の要点です。" + "".join(
+            f"{n}つ目。{t}" + ("" if t.endswith("。") else "。") for n, t in enumerate(top, 1))
+    parts = [{"id": "", "text": intro}]
     for block in digest:
-        parts.append(f"まずは、{block['category']}のニュースです。" if len(parts) == 1
-                     else f"続いて、{block['category']}のニュースです。")
+        lines = [f"{block['category']}のニュースです。"]
         for n, p in enumerate(block["points"], 1):
             if isinstance(p, dict):
-                parts.append(f"{n}本目。{p.get('headline', '')}。{p.get('body', '')}")
+                lines.append(f"{n}本目。{p.get('headline', '')}。{p.get('body', '')}")
+                if p.get("point"):
+                    lines.append(f"ポイント。{p['point']}")
             else:
-                parts.append(f"{n}本目。{p}。")
-    parts.append("以上、今日のニュースでした。今日もいってらっしゃい。")
-    return for_reading("".join(parts), readings)
+                lines.append(f"{n}本目。{p}。")
+        parts.append({"id": block.get("id", ""), "category": block["category"], "text": "".join(lines)})
+    parts.append({"id": "", "text": "以上、今日のニュースでした。今日もいってらっしゃい。"})
+    for part in parts:
+        part["text"] = for_reading(part["text"], readings)
+    return parts
+
+
+def digest_to_script(digest: list[dict], date_label: str, readings: dict | None = None) -> str:
+    """全部通しの原稿(声の聞き比べなどで使う)。"""
+    return "".join(p["text"] for p in digest_to_parts(digest, date_label, readings))
 
 
 def write_script(items: list[dict], categories: list[dict], date_label: str, fetch=True) -> dict:
@@ -335,8 +366,11 @@ def write_script(items: list[dict], categories: list[dict], date_label: str, fet
                 f"[{i}]{items[i]['title']}\n概要: {items[i]['summary']}\n本文: {items[i].get('body', '')}"
                 for i in mine
             )
+            point = c.get("point")
             data = ask_gemini(client, PROMPT.format(
-                category=c["name"], focus=c.get("focus", ""), articles=articles))
+                category=c["name"], focus=c.get("focus", ""), articles=articles,
+                point_rule=POINT_RULE.format(point=point) if point else "",
+                point_field=', "point": "ポイント"' if point else ""))
             if not (data and data.get("points")):
                 continue
             points = data.get("points", [])
@@ -347,7 +381,7 @@ def write_script(items: list[dict], categories: list[dict], date_label: str, fet
                 new = (longer or {}).get("points", [])
                 readings.update((longer or {}).get("readings") or {})
                 if len(new) == len(points):
-                    points = [n if len(n.get("body", "")) > len(o.get("body", "")) else o
+                    points = [{**o, **n} if len(n.get("body", "")) > len(o.get("body", "")) else o
                               for o, n in zip(points, new)]
             digest.append({"category": c["name"], "points": points})
             done += [int(i) for i in data.get("used", mine)]
@@ -355,21 +389,25 @@ def write_script(items: list[dict], categories: list[dict], date_label: str, fet
             digest = merge_digest(digest, categories)
             readings = {k: v for k, v in readings.items()
                         if isinstance(k, str) and isinstance(v, str) and re.search(r"[A-Za-z]", k)}
-            return {"script": digest_to_script(digest, date_label, readings),
-                    "digest": digest, "used": done}
+            # 最後に: 全体から今日の要点を3つ(失敗しても要点なしで続ける)
+            summary = "\n".join(f"【{b['category']}】{p.get('headline', '')}: {p.get('body', '')}"
+                                for b in digest for p in b["points"] if isinstance(p, dict))
+            top = [t for t in ((ask_gemini(client, TOP_PROMPT.format(digest=summary)) or {})
+                               .get("top") or []) if isinstance(t, str) and t.strip()][:3]
+            return {"parts": digest_to_parts(digest, date_label, readings, top),
+                    "digest": digest, "top": top, "used": done}
     # 予備: AIなしで見出しを読み上げる(種類ごとに数本ずつ)
     print("fallback: headlines only", file=sys.stderr)
     picked = []
     for c in categories:
         picked += [i for i, it in enumerate(items) if it["category"] == c["name"]][:counts[c["name"]]]
-    body = "".join(f"{n}本目。{items[i]['title']}。" for n, i in enumerate(picked, 1))
-    script = f"おはようございます。{date_label}のニュースです。{body}以上、今日のニュースでした。"
     digest = [
-        {"category": c["name"],
+        {"category": c["name"], "id": c.get("id", ""),
          "points": [items[i]["title"] for i in picked if items[i]["category"] == c["name"]]}
         for c in categories
     ]
-    return {"script": script, "digest": [d for d in digest if d["points"]], "used": picked}
+    digest = [d for d in digest if d["points"]]
+    return {"parts": digest_to_parts(digest, date_label), "digest": digest, "top": [], "used": picked}
 
 
 def split_sentences(text: str, limit: int = 120) -> list[str]:
@@ -459,18 +497,33 @@ def find_speaker(voice: dict) -> int:
     return int(voice["speaker"])
 
 
-def speak(script: str, voice: dict):
+def part_files(parts: list[dict]) -> dict:
+    """種類ごとの音声ファイル名(id がない部分=あいさつ等は全部通しにだけ入る)。"""
+    return {p["id"]: OUT / f"episode-{p['id']}.mp3" for p in parts if p.get("id")}
+
+
+def speak_parts(parts: list[dict], synth):
+    """部分ごとに読み上げ、全部通しの音声と種類ごとの音声を作る(1回の読み上げで両方作る)。"""
+    chunks = [[synth(s) for s in split_sentences(p["text"])] for p in parts]
+    to_mp3([c for cs in chunks for c in cs], OUT / "episode.mp3")
+    for p, cs in zip(parts, chunks):
+        if p.get("id"):
+            to_mp3(cs, part_files(parts)[p["id"]])
+
+
+def speak(parts: list[dict], voice: dict):
     """選んだ声で読み上げる。うまくいかなければもう一方の読み上げに切り替える。"""
     def by_voicevox():
         wait_voicevox()
         speaker = find_speaker(voice)
-        chunks = [synth_voicevox(s, speaker, float(voice["speed"]))
-                  for s in split_sentences(script)]
-        to_mp3(chunks, OUT / "episode.mp3")
+        speak_parts(parts, lambda s: synth_voicevox(s, speaker, float(voice["speed"])))
         print(f"voice: voicevox {voice.get('name')} {voice.get('style')} ({speaker})")
 
     def by_edge():
-        synth_edge(script, OUT / "episode.mp3")
+        synth_edge("".join(p["text"] for p in parts), OUT / "episode.mp3")
+        for p in parts:
+            if p.get("id"):
+                synth_edge(p["text"], part_files(parts)[p["id"]])
         print(f"voice: edge {EDGE_VOICE}")
 
     first, backup = (by_edge, by_voicevox) if voice["engine"] == "edge" else (by_voicevox, by_edge)
@@ -507,11 +560,14 @@ def main():
         result = write_script(items, categories, date_label)
         synth = None
 
-    script = result["script"]
+    parts = result["parts"]
+    script = "".join(p["text"] for p in parts)
+    for old in OUT.glob("episode-*.mp3"):  # 前回の種類ごとの音声が残らないように
+        old.unlink()
     if synth:
-        to_mp3([synth(s) for s in split_sentences(script)], OUT / "episode.mp3")
+        speak_parts(parts, synth)
     else:
-        speak(script, load_voice())
+        speak(parts, load_voice())
 
     sources = [items[i] for i in result["used"] if 0 <= i < len(items)]
     meta = {
@@ -519,7 +575,9 @@ def main():
         "voice": load_voice().get("name", ""),
         "title": f"{date_label}の朝ニュース",
         "script": script,
+        "top": result.get("top", []),
         "digest": result["digest"],
+        "parts": [{"id": p["id"], "category": p["category"]} for p in parts if p.get("id")],
         "sources": [{"category": s["category"], "title": s["title"], "link": s["link"]}
                     for s in sources],
     }

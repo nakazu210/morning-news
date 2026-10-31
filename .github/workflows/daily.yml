@@ -76,9 +76,9 @@ jobs:
         run: |
           TAG="ep-$(TZ=Asia/Tokyo date +%Y%m%d)"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" out/episode.mp3 out/episode.json --clobber
+            gh release upload "$TAG" out/episode*.mp3 out/episode.json --clobber
           else
-            gh release create "$TAG" out/episode.mp3 out/episode.json \
+            gh release create "$TAG" out/episode*.mp3 out/episode.json \
               --title "$TAG" --notes "自動生成エピソード"
           fi
 

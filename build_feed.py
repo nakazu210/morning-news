@@ -1,6 +1,6 @@
 """保存してある直近のエピソードから、Pages用のサイト(feed.xml / index.html)を作る。
 
-入力: episodes/<日付>/episode.mp3, episode.json
+入力: episodes/<日付>/episode.mp3, episode-<種類のid>.mp3, episode.json
 出力: public/ (このフォルダだけがPagesに公開されます。管理画面 admin.html もここに置きます)
 """
 
@@ -46,6 +46,11 @@ for d in sorted(src.iterdir(), reverse=True) if src.exists() else []:
     meta = json.loads(meta_file.read_text(encoding="utf-8"))
     name = f"{meta['date']}.mp3"
     shutil.copy(mp3, pub / "audio" / name)
+    for part in meta.get("parts", []):  # 種類ごとの音声(LINEの各ジャンルのボタン用)
+        f = d / f"episode-{part['id']}.mp3"
+        if f.exists():
+            shutil.copy(f, pub / "audio" / f"{meta['date']}-{part['id']}.mp3")
+            part["secs"] = duration(f)
     meta.update(url=f"{SITE_URL}/audio/{name}", size=mp3.stat().st_size, secs=duration(mp3))
     episodes.append(meta)
 
@@ -99,6 +104,9 @@ img.save(pub / "cover.png")
 rows = "".join(
     f"<section id=\"{ep['date']}\"><h2>{html.escape(ep['title'])}</h2>"
     f'<audio controls preload="none" src="audio/{ep["date"]}.mp3"></audio>'
+    + "".join(f'<p class="part">{html.escape(pt["category"])}だけ聞く</p>'
+              f'<audio controls preload="none" src="audio/{ep["date"]}-{pt["id"]}.mp3"></audio>'
+              for pt in ep.get("parts", []) if "secs" in pt)
     f"<details><summary>原稿と元記事</summary><p>{html.escape(ep['script'])}</p>{notes(ep)}</details></section>"
     for ep in episodes
 )
@@ -108,10 +116,13 @@ page = f"""<!doctype html><html lang="ja"><head><meta charset="utf-8">
 <style>body{{font-family:system-ui,sans-serif;max-width:640px;margin:auto;padding:16px;background:#f7f7f5;color:#222}}
 section{{background:#fff;border-radius:12px;padding:16px;margin:12px 0}}audio{{width:100%}}
 h2{{font-size:1.05rem;margin:0 0 8px}}details{{margin-top:8px;font-size:.9rem;line-height:1.7}}
-code{{background:#eee;padding:2px 6px;border-radius:4px;word-break:break-all}}</style></head><body>
+code{{background:#eee;padding:2px 6px;border-radius:4px;word-break:break-all}}
+.part{{margin:10px 0 2px;font-size:.85rem;color:#555}}
+.sub{{display:inline-block;background:#8b5cf6;color:#fff;padding:8px 14px;border-radius:8px;text-decoration:none}}</style></head><body>
 <h1>{html.escape(SHOW_TITLE)}</h1>
 <p><a href="admin.html">ニュースの種類を選ぶ(管理画面)</a></p>
-<p>ポッドキャストアプリ登録用URL:<br><code>{SITE_URL}/feed.xml</code></p>
+<p><a class="sub" href="podcast://{SITE_URL.split("://", 1)[1]}/feed.xml">iPhoneのPodcastアプリに登録する</a></p>
+<p>ほかのポッドキャストアプリ登録用URL:<br><code>{SITE_URL}/feed.xml</code></p>
 {rows or '<p>まだエピソードがありません。</p>'}
 </body></html>"""
 (pub / "index.html").write_text(page, encoding="utf-8")
