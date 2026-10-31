@@ -172,7 +172,7 @@ SELECT_PROMPT = """以下は今朝のニュース候補の見出し一覧です�
 
 PROMPT = """あなたは新聞記者です。
 以下の「{category}」の記事(本文つき)をもとに、LINEで読む新聞のような記事要約を作ってください。
-この要約は、そのまま音声でも読み上げます。
+この要約は目で読むためのものです(音声は別の仕組みで読み上げ用に直すので、読み上げ向けに書きかえない)。
 
 この種類で重視してほしい内容: {focus}
 
@@ -180,14 +180,18 @@ PROMPT = """あなたは新聞記者です。
 - すべての記事について、新聞記事のように「見出し」と「本文」を書く。
 - 見出しは20〜30文字で、何が起きたかが一目でわかるように。
 - 本文は必ず400〜600文字(短すぎるのは不可)。最初の1文で要点(誰が・何を・いつ)を伝え、続けて具体的な数字・金額・期間・対象・条件・性能・料金・提供開始時期などの中身をできるだけ多く、最後に背景や影響(なぜ重要か、これまでとの違い、競合との比較)を書く。
-- 英語の記事も日本語で書く。製品名などは英字のままでよい。だ・である調で書く。
+- 英語の記事も日本語で書く。だ・である調で書く。
+- 数字は算用数字で書く(例: 10月29日、0.25%、330万円、約1兆)。漢数字やカタカナの読みに書きかえない。
+- 会社名・製品名・モデル名は元の表記のまま英字で書く(例: Mistral AI、Hugging Face、GLM-5.3)。カタカナに書きかえない。
+- 本文は内容の切れ目で2〜3段落に分け、段落の間は改行(\\n)を1つ入れる。
 - 「〜について発表しました」のような中身のない書き方はしない。本文に書かれた具体的な情報を必ず入れる。
 - 本文が空の記事は、見出しと概要からわかる範囲で書き、推測で補わない。
 - 本文がログイン画面・セキュリティチェック・エラー表示など記事でない場合は、その記事を要約から外す。「詳細は不明」のような書き方はしない。
-- 記号・箇条書き・URLは使わない(耳で聞いてもわかるように)。記事にない事実は足さない。
+- 箇条書き・URLは使わない。記事にない事実は足さない。
+- 見出しと本文に出てきた英字の名前は、すべて readings にカタカナの読み方を入れる(音声の読み上げに使う)。
 
 出力はJSONのみ:
-{{"points": [{{"headline": "見出し", "body": "本文"}}], "used": [使った記事の番号]}}
+{{"points": [{{"headline": "見出し", "body": "本文"}}], "used": [使った記事の番号], "readings": {{"Hugging Face": "ハギングフェイス"}}}}
 
 記事一覧:
 {articles}
@@ -197,8 +201,10 @@ PROMPT = """あなたは新聞記者です。
 EXPAND_PROMPT = """以下のニュース要約は短すぎます。元の記事をもとに、それぞれの本文を450〜600文字に書き直してください。
 具体的な数字・金額・期間・対象・条件・性能・料金などの中身と、背景や影響(なぜ重要か、これまでとの違い)を足してください。
 記事にない事実は足さない。だ・である調。見出しは変えない。
+数字は算用数字、会社名・製品名は英字のまま書く。本文は2〜3段落に分け、段落の間は改行(\\n)を1つ入れる。
+本文に出てきた英字の名前は、すべて readings にカタカナの読み方を入れる。
 
-出力はJSONのみ: {{"points": [{{"headline": "見出し", "body": "本文"}}]}}
+出力はJSONのみ: {{"points": [{{"headline": "見出し", "body": "本文"}}], "readings": {{"英字の名前": "カタカナの読み"}}}}
 
 短い要約:
 {points}
@@ -263,15 +269,19 @@ READINGS = {
 }
 
 
-def for_reading(text: str) -> str:
-    """音声用に、英字の名前をカタカナにし、読まなくてよい記号を外す。"""
-    text = re.sub(r"https?://\S+", "", text)
-    for word in sorted(READINGS, key=len, reverse=True):
-        text = re.sub(rf"(?<![A-Za-z]){re.escape(word)}(?![A-Za-z])", READINGS[word], text)
+def for_reading(text: str, extra: dict | None = None) -> str:
+    """音声用に、英字の名前をカタカナにし、読まなくてよい記号や改行を外す。
+    extra は Gemini がその日の記事について教えてくれた読み方(READINGS より優先)。"""
+    readings = {**READINGS, **(extra or {})}
+    text = re.sub(r"https?://\S+", "", text).replace("\n", " ")
+    text = re.sub(r"(?<=\d),(?=\d{3})", "", text)  # 1,500 → 1500(区切りの読み間違いを防ぐ)
+    text = re.sub(r"(?<=[\d%])[〜~～](?=\d)", "から", text)  # 0.25〜0.5% → 0.25から0.5%
+    for word in sorted(readings, key=len, reverse=True):
+        text = re.sub(rf"(?<![A-Za-z]){re.escape(word)}(?![A-Za-z])", readings[word], text)
     return re.sub(r"[「」『』【】〈〉《》（）()\[\]・※*#]|(?<=ー)-", " ", text)
 
 
-def digest_to_script(digest: list[dict], date_label: str) -> str:
+def digest_to_script(digest: list[dict], date_label: str, readings: dict | None = None) -> str:
     """LINEの要約(見出し＋本文)を、全部そのまま読み上げる原稿にする。"""
     parts = [f"おはようございます。{date_label}のニュースです。"]
     for block in digest:
@@ -283,7 +293,7 @@ def digest_to_script(digest: list[dict], date_label: str) -> str:
             else:
                 parts.append(f"{n}本目。{p}。")
     parts.append("以上、今日のニュースでした。今日もいってらっしゃい。")
-    return for_reading("".join(parts))
+    return for_reading("".join(parts), readings)
 
 
 def write_script(items: list[dict], categories: list[dict], date_label: str, fetch=True) -> dict:
@@ -316,7 +326,7 @@ def write_script(items: list[dict], categories: list[dict], date_label: str, fet
                 fetch_body(items[i])
         print(f"bodies: {sum(1 for i in used if items[i].get('body'))}/{len(used)}")
         # 2回目以降: 種類ごとに本文を読んで原稿と要約を書く(一度に書く量を減らして長さを守らせる)
-        digest, done = [], []
+        digest, done, readings = [], [], {}
         for c in categories:
             mine = [i for i in used if items[i]["category"] == c["name"]]
             if not mine:
@@ -330,10 +340,12 @@ def write_script(items: list[dict], categories: list[dict], date_label: str, fet
             if not (data and data.get("points")):
                 continue
             points = data.get("points", [])
+            readings.update(data.get("readings") or {})
             if any(len(p.get("body", "")) < MIN_BODY for p in points):  # 軽いモデルは短く書きがち
                 longer = ask_gemini(client, EXPAND_PROMPT.format(
                     points=json.dumps(points, ensure_ascii=False), articles=articles))
                 new = (longer or {}).get("points", [])
+                readings.update((longer or {}).get("readings") or {})
                 if len(new) == len(points):
                     points = [n if len(n.get("body", "")) > len(o.get("body", "")) else o
                               for o, n in zip(points, new)]
@@ -341,7 +353,10 @@ def write_script(items: list[dict], categories: list[dict], date_label: str, fet
             done += [int(i) for i in data.get("used", mine)]
         if digest:
             digest = merge_digest(digest, categories)
-            return {"script": digest_to_script(digest, date_label), "digest": digest, "used": done}
+            readings = {k: v for k, v in readings.items()
+                        if isinstance(k, str) and isinstance(v, str) and re.search(r"[A-Za-z]", k)}
+            return {"script": digest_to_script(digest, date_label, readings),
+                    "digest": digest, "used": done}
     # 予備: AIなしで見出しを読み上げる(種類ごとに数本ずつ)
     print("fallback: headlines only", file=sys.stderr)
     picked = []
