@@ -23,7 +23,7 @@ LIMIT = 4900  # LINEのテキストは1通5000文字まで
 API = "https://api.line.me/v2/bot/message"
 
 # 種類ごとのカードの色(config.json にない名前はグレー)
-COLORS = {"生成AI全般": "#2F6FDE", "住宅・不動産": "#2E9E5B", "岡山県の自治体ニュース": "#E07A1F"}
+COLORS = {"生成AI全般": "#2F6FDE", "住宅・不動産": "#237D47", "岡山県の自治体ニュース": "#C85A17"}
 SHORT = {"生成AI全般": "生成AI", "住宅・不動産": "住宅・不動産", "岡山県の自治体ニュース": "岡山県"}
 
 
@@ -41,16 +41,23 @@ def split_point(p) -> tuple[str, str]:
 
 
 def paragraphs(body: str) -> list[str]:
-    """本文を段落に分ける。改行がなければ2文ずつ区切る。"""
-    parts = [s.strip() for s in body.split("\n") if s.strip()]
+    """本文を段落に分ける。改行がなければ2文ずつ区切る。
+    AIが改行を「\\n」という文字のまま書いてくることがあるので、それも改行として扱う。"""
+    body = body.replace("\\n", "\n").replace("\r", "")
+    parts = [s.strip(" 　") for s in body.split("\n") if s.strip(" 　")]
     if len(parts) > 1:
         return parts
-    sentences = [s for s in re.split(r"(?<=。)", body) if s.strip()]
+    sentences = [s.strip(" 　") for s in re.split(r"(?<=。)(?![」』）)])", body) if s.strip(" 　")]
     return ["".join(sentences[i:i + 2]) for i in range(0, len(sentences), 2)] or [body]
 
 
+def tidy(t: str) -> str:
+    """AIの書いた文字の「\\n」を改行に直し、前後の空白・改行を取る。"""
+    return (t or "").replace("\\n", "\n").strip()
+
+
 def text(t: str, **kw) -> dict:
-    return {"type": "text", "text": t or " ", "wrap": True, **kw}
+    return {"type": "text", "text": tidy(t) or " ", "wrap": True, **kw}
 
 
 def cover(meta: dict, digest: list[dict]) -> dict:
@@ -58,21 +65,21 @@ def cover(meta: dict, digest: list[dict]) -> dict:
     rows = []
     if meta.get("top"):
         rows.append({"type": "box", "layout": "vertical", "backgroundColor": "#FFF7E0", "cornerRadius": "8px",
-                     "paddingAll": "12px", "margin": "md", "spacing": "sm",
+                     "paddingAll": "12px", "spacing": "md",
                      "contents": [text("今日の要点", size="sm", weight="bold", color="#B45309")]
-                     + [text(f"・{t}", size="sm", color="#333333") for t in meta["top"]]})
+                     + [text(f"・{tidy(t)}", size="md", color="#333333", lineSpacing="4px") for t in meta["top"]]})
     for block in digest:
         color = COLORS.get(block["category"], "#666666")
         rows.append(text(f"■ {block['category']}", size="sm", weight="bold", color=color, margin="lg"))
         for n, p in enumerate(block.get("points", []), 1):
-            rows.append(text(f"{n}. {split_point(p)[0]}", size="sm", color="#333333", margin="sm"))
+            rows.append(text(f"{n}. {tidy(split_point(p)[0])}", size="sm", color="#333333", margin="md"))
     bubble = {
         "type": "bubble", "size": "giga",
         "header": {"type": "box", "layout": "vertical", "backgroundColor": "#1F2937", "paddingAll": "16px",
                    "contents": [text(meta["title"], size="lg", weight="bold", color="#FFFFFF"),
-                                text("今日の見出し(下のカードを横にめくって読めます)", size="xs", color="#D1D5DB")]},
+                                text("今日の見出し(下のカードを横にめくって読めます)", size="sm", color="#E5E7EB")]},
         "body": {"type": "box", "layout": "vertical", "contents": rows},
-        "footer": {"type": "box", "layout": "vertical", "contents": [
+        "footer": {"type": "box", "layout": "vertical", "spacing": "sm", "contents": [
             {"type": "button", "style": "primary", "color": "#1F2937",
              "action": {"type": "uri", "label": "全部通しで聞く", "uri": audio_url(meta)}},
             {"type": "button", "style": "link", "height": "sm",
@@ -81,7 +88,7 @@ def cover(meta: dict, digest: list[dict]) -> dict:
     return {"type": "flex", "altText": meta["title"], "contents": bubble}
 
 
-def card(category: str, n: int, total: int, p, listen: str | None = None) -> dict:
+def card(category: str, n: int, total: int, p, listen: str | None = None, size: str = "giga") -> dict:
     """記事1本のカード。listen があれば下に「この種類だけ聞く」ボタンを付ける。"""
     headline, body = split_point(p)
     color = COLORS.get(category, "#666666")
@@ -92,10 +99,10 @@ def card(category: str, n: int, total: int, p, listen: str | None = None) -> dic
     if isinstance(p, dict) and p.get("point"):
         contents.append({"type": "box", "layout": "vertical", "backgroundColor": "#F3F4F6", "cornerRadius": "8px",
                          "paddingAll": "12px", "margin": "lg", "spacing": "xs",
-                         "contents": [text("ポイント", size="xs", weight="bold", color=color),
-                                      text(p["point"], size="sm", color="#333333", lineSpacing="4px")]})
+                         "contents": [text("ポイント", size="sm", weight="bold", color=color),
+                                      text(p["point"], size="md", color="#333333", lineSpacing="4px")]})
     bubble = {
-        "type": "bubble", "size": "giga",
+        "type": "bubble", "size": size,
         "header": {"type": "box", "layout": "vertical", "backgroundColor": color, "paddingAll": "10px",
                    "contents": [text(f"{SHORT.get(category, category)}  {n} / {total}",
                                      size="sm", weight="bold", color="#FFFFFF")]},
@@ -108,7 +115,7 @@ def card(category: str, n: int, total: int, p, listen: str | None = None) -> dic
     return bubble
 
 
-def build_flex(meta: dict) -> list[dict]:
+def build_flex(meta: dict, size: str = "giga") -> list[dict]:
     """表紙1通＋種類ごとにカードを横に並べたもの(LINEは1回で最大5通、1通に最大12枚)。"""
     digest = meta.get("digest", [])[:4]
     messages = [cover(meta, digest)]
@@ -118,7 +125,7 @@ def build_flex(meta: dict) -> list[dict]:
         if not points:
             continue
         listen = audio_url(meta, block["id"]) if block.get("id") in has_audio else None
-        cards = [card(block["category"], n, len(points), p, listen if n == 1 else None)
+        cards = [card(block["category"], n, len(points), p, listen if n == 1 else None, size)
                  for n, p in enumerate(points, 1)]
         messages.append({"type": "flex", "altText": f"{block['category']}のニュース({len(points)}本)",
                          "contents": {"type": "carousel", "contents": cards}})
@@ -132,12 +139,13 @@ def build_text(meta: dict) -> list[dict]:
         lines = [f"■ {block['category']}"]
         for p in block.get("points", []):
             headline, body = split_point(p)
-            lines.append(f"\n◆{headline}\n" + "\n\n".join(paragraphs(body)) if body else f"\n◆{headline}")
-            if isinstance(p, dict) and p.get("point"):
-                lines.append(f"\n▶ポイント:{p['point']}")
+            headline = tidy(headline)
+            lines.append(f"\n◆{headline}\n" + "\n\n".join(paragraphs(body)) if body.strip() else f"\n◆{headline}")
+            if isinstance(p, dict) and tidy(p.get("point", "")):
+                lines.append(f"\n▶ポイント\n{tidy(p['point'])}")
         texts.append("\n".join(lines))
     texts = texts[:4] or ["今日は要約を作れませんでした。"]
-    top = "".join(f"・{t}\n" for t in meta.get("top", []))
+    top = "".join(f"・{tidy(t)}\n" for t in meta.get("top", []))
     texts[0] = f"【{meta['title']}】\n\n" + (f"今日の要点\n{top}\n" if top else "") + texts[0]
     texts = [t if len(t) <= LIMIT else t[: LIMIT - 1] + "…" for t in texts]
     texts.append(f"音声で聞く\n{audio_url(meta)}\n\n元記事を見る\n{SITE_URL}/#{meta['date']}")
@@ -161,15 +169,15 @@ def main():
     kind = "push" if user_id else "broadcast"
     headers = {"Authorization": f"Bearer {token}"}
 
-    messages = build_flex(meta)
-    try:
-        check = requests.post(f"{API}/validate/{kind}", headers=headers, json={"messages": messages}, timeout=30)
-        problem = None if check.ok else f"{check.status_code} {check.text}"
-    except requests.RequestException as e:
-        problem = str(e)
-    if problem:
-        print(f"カード形式が使えないので文字だけで送ります: {problem}", file=sys.stderr)
-        messages = build_text(meta)
+    # 大きいカード → 標準サイズのカード → 文字だけ、の順に、LINEの形式チェックに通るものを使う
+    for messages in (build_flex(meta, "giga"), build_flex(meta, "mega"), build_text(meta)):
+        try:
+            check = requests.post(f"{API}/validate/{kind}", headers=headers, json={"messages": messages}, timeout=30)
+            if check.ok:
+                break
+            print(f"形式チェックで不合格のため次の形を試します: {check.status_code} {check.text}", file=sys.stderr)
+        except requests.RequestException as e:
+            print(f"形式チェックができないため次の形を試します: {e}", file=sys.stderr)
 
     body = {"messages": messages}
     if user_id:

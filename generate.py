@@ -289,7 +289,7 @@ def for_reading(text: str, extra: dict | None = None) -> str:
     """音声用に、英字の名前をカタカナにし、読まなくてよい記号や改行を外す。
     extra は Gemini がその日の記事について教えてくれた読み方(READINGS より優先)。"""
     readings = {**READINGS, **(extra or {})}
-    text = re.sub(r"https?://\S+", "", text).replace("\n", " ")
+    text = re.sub(r"https?://\S+", "", text).replace("\\n", " ").replace("\n", " ")
     text = re.sub(r"(?<=\d),(?=\d{3})", "", text)  # 1,500 → 1500(区切りの読み間違いを防ぐ)
     text = re.sub(r"(?<=[\d%])[〜~～](?=\d)", "から", text)  # 0.25〜0.5% → 0.25から0.5%
     for word in sorted(readings, key=len, reverse=True):
