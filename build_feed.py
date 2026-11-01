@@ -107,7 +107,7 @@ rows = "".join(
     + "".join(f'<p class="part">{html.escape(pt["category"])}だけ聞く</p>'
               f'<audio controls preload="none" src="audio/{ep["date"]}-{pt["id"]}.mp3"></audio>'
               for pt in ep.get("parts", []) if "secs" in pt)
-    f"<details><summary>原稿と元記事</summary><p>{html.escape(ep['script'])}</p>{notes(ep)}</details></section>"
+    + f"<details><summary>原稿と元記事</summary><p>{html.escape(ep['script'])}</p>{notes(ep)}</details></section>"
     for ep in episodes
 )
 page = f"""<!doctype html><html lang="ja"><head><meta charset="utf-8">
