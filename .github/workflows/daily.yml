@@ -75,6 +75,16 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends ffmpeg
           pip install -q -r requirements.txt
 
+      - name: Get articles sent on previous days
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 同じ記事をもう一度送らないように、前の日まで(今日の分は除く)3日分の episode.json を取ってくる
+          TODAY="ep-$(TZ=Asia/Tokyo date +%Y%m%d)"
+          for TAG in $(gh release list --limit 20 --json tagName -q '.[].tagName' | grep '^ep-' | grep -v "^$TODAY$" | sort -r | head -3); do
+            gh release download "$TAG" -p episode.json -D "prev/$TAG" || echo "skip $TAG"
+          done
+
       - name: Generate today's episode
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

@@ -40,6 +40,7 @@ VOICEVOX_URL = os.getenv("VOICEVOX_URL", "http://localhost:50021")
 SPEAKER_ID = int(os.getenv("VOICEVOX_SPEAKER", "8"))  # 8 = 春日部つむぎ(ノーマル)
 SPEED = float(os.getenv("VOICEVOX_SPEED", "1.15"))
 DEFAULT_COUNT = 3  # config.json に count がない種類の記事数
+PREV = Path("prev")  # 前の日までに送った episode.json(GitHub Actions が Releases から取ってくる)
 PER_CATEGORY = 25  # 1種類あたりAIに渡す候補の数
 BODY_CHARS = 4000  # AIに渡す本文の長さ(1記事あたり)
 UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -75,11 +76,39 @@ def clean(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def fetch_news(categories: list[dict]) -> list[dict]:
-    """種類ごとにRSSから直近の記事を集めて、重複を除いて返す。"""
-    items, seen = [], set()
+def title_key(title: str) -> str:
+    return re.sub(r"\W", "", title)[:30]
+
+
+def load_sent() -> tuple[set, list[str]]:
+    """前の日までに送った記事(同じ記事をもう一度送らないため)。見出しのキーとリンク、見出し一覧を返す。"""
+    keys, titles = set(), []
+    for f in sorted(PREV.glob("*/episode.json")):
+        try:
+            meta = json.loads(f.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"prev skip {f}: {e}", file=sys.stderr)
+            continue
+        for s in meta.get("sources", []):
+            if s.get("title"):
+                keys.add(title_key(s["title"]))
+                titles.append(s["title"])
+            if s.get("link"):
+                keys.add(s["link"])
+        for b in meta.get("digest", []):  # 要約の見出しも(別のサイトの同じ話題をAIに避けてもらう)
+            for pt in b.get("points", []):
+                if isinstance(pt, dict) and pt.get("headline"):
+                    titles.append(pt["headline"])
+    return keys, titles
+
+
+def fetch_news(categories: list[dict], sent: set | None = None) -> list[dict]:
+    """種類ごとにRSSから直近の記事を集めて、重複と送信済みを除いて返す。"""
+    items, seen = [], set(sent or ())
     for cat in categories:
-        items += fetch_category(cat, seen)[:PER_CATEGORY]
+        got = fetch_category(cat, seen)[:PER_CATEGORY]
+        print(f"candidates {cat.get('id', cat['name'])}: {len(got)}")
+        items += got
     return items
 
 
@@ -99,8 +128,8 @@ def fetch_category(cat: dict, seen: set) -> list[dict]:
             if when and when < since:
                 continue
             title = clean(e.get("title", ""))
-            key = re.sub(r"\W", "", title)[:30]
-            if not title or key in seen or any(w in title for w in cat.get("exclude", [])):
+            key = title_key(title)
+            if not title or key in seen or e.get("link", "") in seen or any(w in title for w in cat.get("exclude", [])):
                 continue
             seen.add(key)
             items.append({
@@ -165,8 +194,12 @@ SELECT_PROMPT = """以下は今朝のニュース候補の見出し一覧です�
 - 英語の記事も選んでよい。新しいAIモデルや新機能の発表は、公式ブログや英語の一次情報を優先する。
 - 生成AIは「新しいAIモデルの発表」「ChatGPT・Claude・Geminiなど主要AIの新機能・アップデート」を最優先し、資金調達・パソコンなどのハードウェア製品・政治の話題は、それが足りないときだけ選ぶ。
 - 同じ出来事を扱う記事は1本だけ選ぶ。
+- 下の「前の日までに送った記事」と同じ出来事を扱う記事は選ばない(続報で新しい事実がある場合だけ選んでよい)。
 
 出力はJSONのみ: {{"used": [選んだ記事の番号]}}
+
+前の日までに送った記事:
+{sent}
 
 記事一覧:
 {articles}
@@ -327,7 +360,8 @@ def digest_to_script(digest: list[dict], date_label: str, readings: dict | None 
     return "".join(p["text"] for p in digest_to_parts(digest, date_label, readings))
 
 
-def write_script(items: list[dict], categories: list[dict], date_label: str, fetch=True) -> dict:
+def write_script(items: list[dict], categories: list[dict], date_label: str, fetch=True,
+                 sent_titles: list[str] | None = None) -> dict:
     """Gemini(無料枠)で記事を選び、本文を読んで原稿と要約を作る。失敗したら見出し読み上げに切り替える。"""
     key = os.getenv("GEMINI_API_KEY")
     counts = {c["name"]: c.get("count", DEFAULT_COUNT) for c in categories}
@@ -341,7 +375,9 @@ def write_script(items: list[dict], categories: list[dict], date_label: str, fet
         headlines = "\n".join(
             f"[{i}]【{it['category']}】{it['title']} — {it['summary']}" for i, it in enumerate(items)
         )
-        picked = ask_gemini(client, SELECT_PROMPT.format(focus=focus, articles=headlines))
+        picked = ask_gemini(client, SELECT_PROMPT.format(
+            focus=focus, articles=headlines,
+            sent="\n".join(f"- {t}" for t in dict.fromkeys(sent_titles or [])) or "(なし)"))
         used, taken = [], {}
         for i in (picked or {}).get("used", []):
             i = int(i)
@@ -554,10 +590,12 @@ def main():
         result = write_script(items, categories, date_label, fetch=False)
         synth = synth_dummy
     else:
-        items = fetch_news(categories)
+        sent, sent_titles = load_sent()
+        print(f"sent before: {len(set(sent_titles))} titles")
+        items = fetch_news(categories, sent)
         if not items:
-            sys.exit("ニュースが1件も取れませんでした")
-        result = write_script(items, categories, date_label)
+            sys.exit("新しいニュースが1件もありませんでした")
+        result = write_script(items, categories, date_label, sent_titles=sent_titles)
         synth = None
 
     parts = result["parts"]
